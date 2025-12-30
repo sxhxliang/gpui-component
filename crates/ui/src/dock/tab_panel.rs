@@ -722,16 +722,52 @@ impl TabPanel {
                     active = false;
                 }
 
+                // Check if this specific panel is closable
+                let panel_closable = panel.closable(cx) && state.closable;
+
                 Some(
                     Tab::new()
                         .ix(ix)
                         .tab_bar_prefix(has_extend_dock_button)
+                        .group("tab-with-close")
                         .map(|this| {
                             if let Some(tab_name) = panel.tab_name(cx) {
                                 this.child(tab_name)
                             } else {
                                 this.child(panel.title(window, cx))
                             }
+                        })
+                        .when(panel_closable, |this| {
+                            // Add close button as suffix
+                            // Always visible when active, only visible on hover when not active
+                            this.child(
+                                div()
+                                    .when(!active, |this| this.invisible())
+                                    .when(!active, |this| {
+                                        this.group_hover("tab-with-close", |this| this.visible())
+                                    })
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "close-tab-{}",
+                                            ix
+                                        )))
+                                        .icon(IconName::Close)
+                                        .xsmall()
+                                        .ml(px(1.))
+                                        .ghost()
+                                        .on_click(
+                                            cx.listener({
+                                                let panel = panel.clone();
+                                                move |view, _, window, cx| {
+                                                    // Stop propagation to prevent tab activation
+                                                    cx.stop_propagation();
+                                                    // Remove the panel
+                                                    view.remove_panel(panel.clone(), window, cx);
+                                                }
+                                            }),
+                                        ),
+                                    ),
+                            )
                         })
                         .selected(active)
                         .on_click(cx.listener({
