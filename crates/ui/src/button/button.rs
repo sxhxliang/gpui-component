@@ -135,7 +135,7 @@ impl ButtonCustomVariant {
     }
 }
 
-/// The veriant of the Button.
+/// The variant of the Button.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ButtonVariant {
     Primary,
@@ -478,9 +478,15 @@ impl RenderOnce for Button {
                     // Normal Button
                     match self.size {
                         Size::Size(size) => this.px(size * 0.2),
-                        Size::XSmall => this.h_5().px_1(),
-                        Size::Small => this.h_6().px_3().when(self.compact, |this| this.px_1p5()),
-                        _ => this.h_8().px_4().when(self.compact, |this| this.px_2()),
+                        Size::XSmall => this.h_5().px_1().when(self.compact, |this| this.min_w_5()),
+                        Size::Small => this
+                            .h_6()
+                            .px_3()
+                            .when(self.compact, |this| this.min_w_6().px_1p5()),
+                        _ => this
+                            .h_8()
+                            .px_4()
+                            .when(self.compact, |this| this.min_w_8().px_2()),
                     }
                 }
             })
@@ -515,7 +521,7 @@ impl RenderOnce for Button {
                         let hover_style = style.hovered(self.outline, cx);
                         this.bg(hover_style.bg)
                             .border_color(hover_style.border)
-                            .text_color(crate::red_400())
+                            .text_color(hover_style.fg)
                     })
                     .active(|this| {
                         let active_style = style.active(self.outline, cx);
@@ -552,12 +558,12 @@ impl RenderOnce for Button {
                         return;
                     }
 
-                    (on_click)(event, window, cx);
+                    on_click(event, window, cx);
                 })
             })
             .when_some(self.on_hover.filter(|_| hoverable), |this, on_hover| {
                 this.on_hover(move |hovered, window, cx| {
-                    (on_hover)(hovered, window, cx);
+                    on_hover(hovered, window, cx);
                 })
             })
             .child({

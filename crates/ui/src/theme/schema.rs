@@ -581,7 +581,7 @@ impl ThemeColor {
         );
         apply_color!(list_even, fallback = self.list);
         apply_color!(list_head, fallback = self.list);
-        apply_color!(list_hover, fallback = self.secondary_hover);
+        apply_color!(list_hover, fallback = self.accent.opacity(0.6));
         apply_color!(popover, fallback = self.background);
         apply_color!(popover_foreground, fallback = self.foreground);
         apply_color!(progress_bar, fallback = self.primary);
@@ -590,7 +590,10 @@ impl ThemeColor {
         apply_color!(scrollbar_thumb, fallback = self.accent);
         apply_color!(scrollbar_thumb_hover, fallback = self.scrollbar_thumb);
         apply_color!(selection, fallback = self.primary);
-        apply_color!(sidebar, fallback = self.background);
+        apply_color!(
+            sidebar,
+            fallback = self.background.blend(self.border.opacity(0.15))
+        );
         apply_color!(sidebar_accent, fallback = self.accent);
         apply_color!(sidebar_accent_foreground, fallback = self.accent_foreground);
         apply_color!(sidebar_border, fallback = self.border);
@@ -603,7 +606,7 @@ impl ThemeColor {
         apply_color!(skeleton, fallback = self.secondary);
         apply_color!(slider_bar, fallback = self.primary);
         apply_color!(slider_thumb, fallback = self.primary_foreground);
-        apply_color!(switch, fallback = self.secondary);
+        apply_color!(switch, fallback = self.secondary_active);
         apply_color!(switch_thumb, fallback = self.background);
         apply_color!(tab, fallback = self.background);
         apply_color!(tab_active, fallback = self.background);

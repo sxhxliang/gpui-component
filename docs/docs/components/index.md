@@ -20,8 +20,10 @@ collapsed: false
 - [Image](image) - Image display with fallbacks
 - [Kbd](kbd) - Keyboard shortcut display
 - [Label](label) - Text labels for form elements
+- [Pagination](pagination) - Page navigation controls
 - [Progress](progress) - Progress bars
 - [Radio](radio) - Single selection from multiple options
+- [Rating](rating) - Interactive star rating component
 - [Skeleton](skeleton) - Loading placeholders
 - [Slider](slider) - Value selection from a range
 - [Spinner](spinner) - Loading and status spinners

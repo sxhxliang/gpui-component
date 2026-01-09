@@ -52,7 +52,8 @@ actions!(
         TestAction,
         Tab,
         TabPrev,
-        ShowPanelInfo
+        ShowPanelInfo,
+        ToggleListActiveHighlight
     ]
 );
 
@@ -454,6 +455,7 @@ impl StoryState {
         }
 
         match self.story_klass.to_string().as_str() {
+            "BreadcrumbStory" => story!(BreadcrumbStory),
             "ButtonStory" => story!(ButtonStory),
             "CalendarStory" => story!(CalendarStory),
             "SelectStory" => story!(SelectStory),
