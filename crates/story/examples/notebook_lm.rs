@@ -7,13 +7,15 @@
 //! - Featured notebook cards with images and metadata
 //! - Recent notebooks section
 
-use gpui::{prelude::FluentBuilder, *};
+use gpui::*;
 use gpui_component::{
-    h_flex, v_flex, ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt as _,
-    Root,
+    ActiveTheme, Icon, IconName, IndexPath, Root, Selectable, Sizable, StyledExt as _,
     button::{Button, ButtonGroup, ButtonVariants as _},
+    h_flex,
+    list::{List, ListDelegate, ListItem, ListState},
     scroll::ScrollableElement as _,
     tab::{Tab, TabBar},
+    v_flex,
 };
 use gpui_component_assets::Assets;
 
@@ -131,21 +133,154 @@ fn mock_notebooks() -> Vec<Notebook> {
 }
 
 // ============================================================================
+// List Delegate
+// ============================================================================
+
+struct NotebookListDelegate {
+    notebooks: Vec<Notebook>,
+    selected_index: Option<IndexPath>,
+}
+
+impl NotebookListDelegate {
+    fn new(notebooks: Vec<Notebook>) -> Self {
+        Self {
+            notebooks,
+            selected_index: None,
+        }
+    }
+
+    fn render_row(
+        &self,
+        notebook: &Notebook,
+        cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+
+        h_flex()
+            .w_full()
+            .h(px(45.))
+            .items_center()
+            .justify_between()
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .size_8()
+                            .rounded_full()
+                            .bg(notebook.background_color)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Icon::new(IconName::File)
+                                    .size_4()
+                                    .text_color(gpui::white().opacity(0.9)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_base()
+                            .font_medium()
+                            .text_color(theme.foreground)
+                            .overflow_x_hidden()
+                            .text_ellipsis()
+                            .child(notebook.title.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .w(px(140.))
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("{} 个来源", notebook.sources)),
+            )
+            .child(
+                div()
+                    .w(px(160.))
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(notebook.date.clone()),
+            )
+            .child(
+                h_flex()
+                    .w(px(120.))
+                    .items_center()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(
+                        Icon::new(IconName::Globe)
+                            .size_4()
+                            .text_color(theme.muted_foreground),
+                    )
+                    .child("Reader"),
+            )
+    }
+}
+
+impl ListDelegate for NotebookListDelegate {
+    type Item = ListItem;
+
+    fn items_count(&self, _: usize, _: &App) -> usize {
+        self.notebooks.len()
+    }
+
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<Self::Item> {
+        let notebook = self.notebooks.get(ix.row)?;
+
+        Some(
+            ListItem::new(ix)
+                .p_0()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(div().px_2().py_2().child(self.render_row(notebook, cx))),
+        )
+    }
+
+    fn set_selected_index(
+        &mut self,
+        ix: Option<IndexPath>,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) {
+        self.selected_index = ix;
+    }
+}
+
+// ============================================================================
 // Main Story Component
 // ============================================================================
 
 pub struct NotebookLMStory {
     focus_handle: FocusHandle,
     notebooks: Vec<Notebook>,
+    notebook_list: Entity<ListState<NotebookListDelegate>>,
     view_mode: ViewMode,
     active_tab_ix: usize,
 }
 
 impl NotebookLMStory {
     fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let notebooks = mock_notebooks();
+        let notebook_list = cx.new(|cx| {
+            ListState::new(NotebookListDelegate::new(notebooks.clone()), _window, cx)
+                .selectable(false)
+        });
+
         Self {
             focus_handle: cx.focus_handle(),
-            notebooks: mock_notebooks(),
+            notebooks,
+            notebook_list,
             view_mode: ViewMode::Grid,
             active_tab_ix: 0,
         }
@@ -170,13 +305,17 @@ impl NotebookLMStory {
             .items_center()
             .px_6()
             .py_4()
-            .border_b_1()
-            .border_color(theme.border)
+            // .border_b_1()
+            // .border_color(theme.border)
             .child(
                 h_flex()
                     .gap_3()
                     .items_center()
-                    .child(Icon::new(IconName::Network).size_6().text_color(theme.foreground))
+                    .child(
+                        Icon::new(IconName::Network)
+                            .size_6()
+                            .text_color(theme.foreground),
+                    )
                     .child(
                         div()
                             .text_xl()
@@ -252,7 +391,6 @@ impl NotebookLMStory {
                                 Button::new("grid-view")
                                     .icon(IconName::LayoutDashboard)
                                     .ghost()
-                                    .small()
                                     .selected(self.view_mode == ViewMode::Grid)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.set_view_mode(ViewMode::Grid, cx);
@@ -262,7 +400,6 @@ impl NotebookLMStory {
                                 Button::new("list-view")
                                     .icon(IconName::Menu)
                                     .ghost()
-                                    .small()
                                     .selected(self.view_mode == ViewMode::List)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.set_view_mode(ViewMode::List, cx);
@@ -272,26 +409,16 @@ impl NotebookLMStory {
                     .child(
                         Button::new("sort")
                             .ghost()
-                            .small()
                             .label("最近")
                             .icon(IconName::ChevronDown),
                     )
-                    .child(
-                        Button::new("new")
-                            .label("新建")
-                            .icon(IconName::Plus),
-                    ),
+                    .child(Button::new("new").label("新建").icon(IconName::Plus)),
             )
     }
 
-
     fn render_featured_section(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let featured: Vec<_> = self
-            .notebooks
-            .iter()
-            .filter(|n| n.is_featured)
-            .collect();
+        let featured: Vec<_> = self.notebooks.iter().filter(|n| n.is_featured).collect();
 
         v_flex()
             .w_full()
@@ -330,16 +457,15 @@ impl NotebookLMStory {
                     ),
             )
             .child(
-                h_flex()
-                    .w_full()
-                    .gap_4()
-                    .children(featured.iter().map(|notebook| {
-                        self.render_featured_card(notebook, cx)
-                    })),
+                h_flex().w_full().gap_4().children(
+                    featured
+                        .iter()
+                        .map(|notebook| self.render_featured_card(notebook, cx)),
+                ),
             )
     }
 
-    fn render_featured_card(&self, notebook: &Notebook, cx: &Context<Self>) -> impl IntoElement {
+    fn render_featured_card(&self, notebook: &Notebook, _cx: &Context<Self>) -> impl IntoElement {
         div()
             .flex_1()
             .min_w(px(240.))
@@ -367,11 +493,7 @@ impl NotebookLMStory {
             )
             .child(
                 // Gradient overlay
-                div()
-                    .absolute()
-                    .size_full()
-                    .bg(gpui::black())
-                    .opacity(0.4),
+                div().absolute().size_full().bg(gpui::black()).opacity(0.4),
             )
             .child(
                 // Content overlay
@@ -453,11 +575,7 @@ impl NotebookLMStory {
 
     fn render_recent_section(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let recent: Vec<_> = self
-            .notebooks
-            .iter()
-            .filter(|n| !n.is_featured)
-            .collect();
+        let recent: Vec<_> = self.notebooks.iter().filter(|n| !n.is_featured).collect();
 
         v_flex()
             .w_full()
@@ -472,13 +590,11 @@ impl NotebookLMStory {
                     .child("最近打开过的笔记本"),
             )
             .child(
-                h_flex()
-                    .w_full()
-                    .gap_4()
-                    .flex_wrap()
-                    .children(recent.iter().map(|notebook| {
-                        self.render_recent_card(notebook, cx)
-                    })),
+                h_flex().w_full().gap_4().flex_wrap().children(
+                    recent
+                        .iter()
+                        .map(|notebook| self.render_recent_card(notebook, cx)),
+                ),
             )
     }
 
@@ -534,21 +650,75 @@ impl NotebookLMStory {
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child(format!(
-                                "{} · {} 个来源",
-                                notebook.date, notebook.sources
-                            )),
+                            .child(format!("{} · {} 个来源", notebook.date, notebook.sources)),
                     ),
             )
     }
 
-    fn render_content(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn render_content(&self, cx: &Context<Self>) -> AnyElement {
+        match self.view_mode {
+            ViewMode::Grid => v_flex()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .child(self.render_featured_section(cx))
+                .child(self.render_recent_section(cx))
+                .into_any_element(),
+            ViewMode::List => self.render_list_view(cx).into_any_element(),
+        }
+    }
+
+    fn render_list_view(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
         v_flex()
             .flex_1()
             .min_h_0()
-            .overflow_y_scrollbar()
-            .child(self.render_featured_section(cx))
-            .child(self.render_recent_section(cx))
+            .px_6()
+            .py_6()
+            .gap_4()
+            .child(
+                div()
+                    .text_xl()
+                    .font_semibold()
+                    .text_color(theme.foreground)
+                    .child("精选笔记本"),
+            )
+            .child(self.render_list_header(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(List::new(&self.notebook_list).size_full()),
+            )
+    }
+
+    fn render_list_header(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        h_flex()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .px_2()
+            .pb_2()
+            .text_sm()
+            .font_medium()
+            .text_color(theme.muted_foreground)
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().w(px(32.)))
+                    .child("名称"),
+            )
+            .child(div().w(px(140.)).child("来源"))
+            .child(div().w(px(160.)).child("创建时间"))
+            .child(div().w(px(120.)).child("角色"))
     }
 }
 
