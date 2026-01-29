@@ -63,6 +63,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai_folder"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aligned-vec"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1036,6 +1047,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ced0551234e87afee12411d535648dd89d2e7f34c78b753395567aff3d447ff"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "chat_session"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "gpui-component-assets",
+ "smol",
 ]
 
 [[package]]
@@ -4407,6 +4429,15 @@ dependencies = [
  "log",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "mixed_virtual_list"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
 ]
 
 [[package]]

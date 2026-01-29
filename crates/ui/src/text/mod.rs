@@ -1,6 +1,7 @@
 mod document;
 mod format;
 mod inline;
+mod markdown_view;
 mod node;
 mod state;
 mod style;
@@ -8,6 +9,7 @@ mod text_view;
 mod utils;
 
 use gpui::{App, ElementId, IntoElement, RenderOnce, SharedString, Window};
+pub use markdown_view::*;
 pub use state::*;
 pub use style::*;
 pub use text_view::*;

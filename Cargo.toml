@@ -13,6 +13,9 @@ members = [
     "examples/dialog_overlay",
     "examples/webview",
     "examples/system_monitor",
+    "examples/ai_folder",
+    "examples/mixed_virtual_list",
+    "examples/chat_session",
 ]
 resolver = "2"
 
