@@ -6,12 +6,23 @@
 //! - Simulated streaming updates
 //! - Collapsible sections for thoughts and tool calls
 
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, rc::Rc, sync::Arc, thread};
 
+use agent_client_protocol::{
+    Agent, AgentSideConnection, AuthMethodId, AuthenticateRequest, Client, ClientCapabilities,
+    ClientSideConnection, ContentBlock, EmbeddedResourceResource, Error, Implementation,
+    InitializeRequest, NewSessionRequest, PermissionOptionKind, PromptRequest, ProtocolVersion,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionNotification, SessionUpdate, StopReason, ToolCall,
+    ToolCallContent, ToolCallStatus, ToolCallUpdate,
+};
+use codex_acp::CodexAgent;
+use codex_core::config::{Config, ConfigOverrides};
 use gpui::*;
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable, StyledExt, VirtualListScrollHandle,
-    button::{Button, ButtonVariants},
+    button::Button,
+    button::ButtonVariants,
     collapsible::Collapsible,
     h_flex,
     input::{InputGroup, InputGroupAddon, InputGroupTextarea, InputState},
@@ -22,24 +33,8 @@ use gpui_component::{
     v_flex, v_virtual_list,
 };
 use gpui_component_assets::Assets;
-
-const STREAM_REPLY: &str = r#"## 相对论的直觉版讲解（流式演示）
-
-以下是一个简洁的直觉框架：
-
-1. **狭义相对论**：光速恒定、同时性是相对的。
-2. **时间膨胀**：运动得越快，时间越慢。
-3. **长度收缩**：沿运动方向会变短。
-4. **广义相对论**：引力可以理解为时空弯曲。
-
-> 这只是概念层面的直觉解释，真正推导需要数学工具（微分几何等）。
-
-### 小结
-- 速度影响时间与长度的测量方式
-- 引力影响时间流逝与空间几何
-- 观察者不同，结论不同
-"#;
-const STREAMING_MESSAGE_ID: usize = 3;
+use tokio::task::LocalSet;
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ChatRole {
@@ -55,7 +50,8 @@ enum ToolStatus {
 }
 
 #[derive(Clone)]
-struct ToolCall {
+struct ChatToolCall {
+    id: String,
     name: String,
     status: ToolStatus,
     duration: String,
@@ -78,7 +74,7 @@ struct ChatMessage {
     badge: Option<String>,
     content: String,
     thinking: Option<String>,
-    tool_calls: Vec<ToolCall>,
+    tool_calls: Vec<ChatToolCall>,
     attachments: Vec<FileAttachment>,
     thoughts_open: bool,
     tools_open: bool,
@@ -146,6 +142,212 @@ impl ChatItem {
     }
 }
 
+enum CodexCommand {
+    Prompt(String),
+}
+
+enum UiEvent {
+    SessionUpdate(SessionUpdate),
+    PromptFinished(StopReason),
+    SystemMessage(String),
+}
+
+struct UiClient {
+    updates: smol::channel::Sender<UiEvent>,
+}
+
+#[async_trait::async_trait(?Send)]
+impl Client for UiClient {
+    async fn request_permission(
+        &self,
+        args: RequestPermissionRequest,
+    ) -> Result<RequestPermissionResponse, Error> {
+        let preferred = args.options.iter().find(|option| {
+            matches!(
+                option.kind,
+                PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways
+            )
+        });
+        let selected = preferred.or_else(|| args.options.first());
+        let response = if let Some(option) = selected {
+            RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+                SelectedPermissionOutcome::new(option.option_id.clone()),
+            ))
+        } else {
+            RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+        };
+        Ok(response)
+    }
+
+    async fn session_notification(&self, args: SessionNotification) -> Result<(), Error> {
+        let _ = self.updates.try_send(UiEvent::SessionUpdate(args.update));
+        Ok(())
+    }
+}
+
+struct CodexBridge {
+    commands: tokio::sync::mpsc::UnboundedSender<CodexCommand>,
+    updates: smol::channel::Receiver<UiEvent>,
+}
+
+fn spawn_codex_bridge() -> CodexBridge {
+    let (updates_tx, updates_rx) = smol::channel::unbounded::<UiEvent>();
+    let (commands_tx, mut commands_rx) = tokio::sync::mpsc::unbounded_channel::<CodexCommand>();
+
+    thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                let _ = updates_tx.try_send(UiEvent::SystemMessage(format!(
+                    "Failed to start runtime: {err}"
+                )));
+                return;
+            }
+        };
+
+        LocalSet::new().block_on(&runtime, async move {
+            let config = match Config::load_with_cli_overrides_and_harness_overrides(
+                vec![],
+                ConfigOverrides::default(),
+            )
+            .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    let _ = updates_tx.try_send(UiEvent::SystemMessage(format!(
+                        "Failed to load Codex config: {err}"
+                    )));
+                    return;
+                }
+            };
+
+            let (agent_read, client_write) = tokio::io::duplex(64 * 1024);
+            let (client_read, agent_write) = tokio::io::duplex(64 * 1024);
+
+            let agent = Rc::new(CodexAgent::new(config));
+            let (acp_client, agent_io_task) = AgentSideConnection::new(
+                agent.clone(),
+                agent_write.compat_write(),
+                agent_read.compat(),
+                |fut| {
+                    tokio::task::spawn_local(fut);
+                },
+            );
+
+            if codex_acp::ACP_CLIENT.set(Arc::new(acp_client)).is_err() {
+                let _ = updates_tx.try_send(UiEvent::SystemMessage(
+                    "Codex ACP client already initialized".to_string(),
+                ));
+            }
+
+            let ui_client = Rc::new(UiClient {
+                updates: updates_tx.clone(),
+            });
+            let (client_conn, client_io_task) = ClientSideConnection::new(
+                ui_client,
+                client_write.compat_write(),
+                client_read.compat(),
+                |fut| {
+                    tokio::task::spawn_local(fut);
+                },
+            );
+
+            let updates_tx_agent = updates_tx.clone();
+            tokio::task::spawn_local(async move {
+                if let Err(err) = agent_io_task.await {
+                    let _ = updates_tx_agent
+                        .try_send(UiEvent::SystemMessage(format!("Agent I/O error: {err:?}")));
+                }
+            });
+
+            let updates_tx_client = updates_tx.clone();
+            tokio::task::spawn_local(async move {
+                if let Err(err) = client_io_task.await {
+                    let _ = updates_tx_client
+                        .try_send(UiEvent::SystemMessage(format!("Client I/O error: {err:?}")));
+                }
+            });
+
+            let init_request = InitializeRequest::new(ProtocolVersion::V1)
+                .client_capabilities(ClientCapabilities::new())
+                .client_info(Implementation::new("gpui-chat", "0.1.0"));
+
+            if let Err(err) = client_conn.initialize(init_request).await {
+                let _ = updates_tx.try_send(UiEvent::SystemMessage(format!(
+                    "Initialize failed: {err:?}"
+                )));
+                return;
+            }
+
+            let auth_method = if std::env::var("CODEX_API_KEY").is_ok() {
+                AuthMethodId::new("codex-api-key")
+            } else if std::env::var("OPENAI_API_KEY").is_ok() {
+                AuthMethodId::new("openai-api-key")
+            } else {
+                AuthMethodId::new("chatgpt")
+            };
+
+            if let Err(err) = client_conn
+                .authenticate(AuthenticateRequest::new(auth_method))
+                .await
+            {
+                let _ = updates_tx.try_send(UiEvent::SystemMessage(format!(
+                    "Authentication failed: {err:?}"
+                )));
+            }
+
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let session_response = match client_conn.new_session(NewSessionRequest::new(cwd)).await
+            {
+                Ok(response) => response,
+                Err(err) => {
+                    let _ = updates_tx.try_send(UiEvent::SystemMessage(format!(
+                        "Failed to create session: {err:?}"
+                    )));
+                    return;
+                }
+            };
+
+            let _ = updates_tx.try_send(UiEvent::SystemMessage(format!(
+                "Connected to Codex ACP (session {})",
+                session_response.session_id
+            )));
+
+            while let Some(command) = commands_rx.recv().await {
+                match command {
+                    CodexCommand::Prompt(prompt) => {
+                        let request = PromptRequest::new(
+                            session_response.session_id.clone(),
+                            vec![ContentBlock::from(prompt)],
+                        );
+                        match client_conn.prompt(request).await {
+                            Ok(response) => {
+                                let _ = updates_tx
+                                    .try_send(UiEvent::PromptFinished(response.stop_reason));
+                            }
+                            Err(err) => {
+                                let _ = updates_tx.try_send(UiEvent::SystemMessage(format!(
+                                    "Prompt failed: {err:?}"
+                                )));
+                                let _ = updates_tx
+                                    .try_send(UiEvent::PromptFinished(StopReason::Cancelled));
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    });
+
+    CodexBridge {
+        commands: commands_tx,
+        updates: updates_rx,
+    }
+}
+
 pub struct ChatSessionView {
     items: Vec<ChatItem>,
     item_sizes: Rc<Vec<Size<Pixels>>>,
@@ -154,64 +356,41 @@ pub struct ChatSessionView {
     last_width: Option<Pixels>,
     pending_remeasure: Vec<usize>,
     markdown_states: HashMap<String, MarkdownState>,
-    stream_tx: smol::channel::Sender<String>,
-    streaming_message_id: usize,
     input_state: Entity<InputState>,
-    _stream_task: Task<()>,
-    _update_task: Task<()>,
+    status_line: String,
+    codex_commands: tokio::sync::mpsc::UnboundedSender<CodexCommand>,
+    is_generating: bool,
+    streaming_role: Option<ChatRole>,
+    active_user_index: Option<usize>,
+    active_assistant_index: Option<usize>,
+    tool_call_index: HashMap<String, usize>,
+    tool_call_cache: HashMap<String, ToolCall>,
+    _codex_task: Task<()>,
 }
 
 impl ChatSessionView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let items = Self::sample_items();
-        let item_sizes = Self::estimate_sizes(&items);
+        let items = Vec::new();
+        let item_sizes = Vec::new();
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Ask a follow-up...")
+                .placeholder("Ask Codex...")
                 .multi_line(true)
         });
 
-        let mut markdown_states = HashMap::new();
-        let streaming_message_id = STREAMING_MESSAGE_ID;
-
-        for item in &items {
-            let ChatItem::Message(message) = item;
-            if message.role == ChatRole::Assistant {
-                let state = MarkdownState::new(&message.content, cx);
-                let message_id = message.id;
-                cx.observe(state.entity(), move |this: &mut Self, _, cx| {
-                    if !this.pending_remeasure.contains(&message_id) {
-                        this.pending_remeasure.push(message_id);
-                    }
-                    cx.notify();
-                })
-                .detach();
-                markdown_states.insert(message.id.to_string(), state);
-            }
-        }
-
-        let (tx, rx) = smol::channel::unbounded::<String>();
         let scroll_handle = VirtualListScrollHandle::new();
+        let codex_bridge = spawn_codex_bridge();
+        let codex_commands = codex_bridge.commands.clone();
+        let updates_rx = codex_bridge.updates;
 
-        let stream_state = markdown_states
-            .get(&streaming_message_id.to_string())
-            .cloned();
-
-        let _stream_task = if let Some(stream_state) = stream_state {
-            let weak_state = stream_state.downgrade();
-            let scroll_handle = scroll_handle.clone();
-            cx.spawn(async move |_, cx| {
-                while let Ok(chunk) = rx.recv().await {
-                    _ = weak_state.update(cx, |state, cx| {
-                        state.push_str(&chunk, cx);
-                        scroll_handle.scroll_to_bottom();
-                    });
-                }
-            })
-        } else {
-            Task::ready(())
-        };
+        let _codex_task = cx.spawn(async move |this, cx| {
+            while let Ok(event) = updates_rx.recv().await {
+                let _ = this.update(cx, |this, cx| {
+                    this.handle_codex_event(event, cx);
+                });
+            }
+        });
 
         Self {
             items,
@@ -220,23 +399,18 @@ impl ChatSessionView {
             measured: false,
             last_width: None,
             pending_remeasure: Vec::new(),
-            markdown_states,
-            stream_tx: tx,
-            streaming_message_id,
+            markdown_states: HashMap::new(),
             input_state,
-            _stream_task,
-            _update_task: Task::ready(()),
+            status_line: "Connecting to Codex ACP...".to_string(),
+            codex_commands,
+            is_generating: false,
+            streaming_role: None,
+            active_user_index: None,
+            active_assistant_index: None,
+            tool_call_index: HashMap::new(),
+            tool_call_cache: HashMap::new(),
+            _codex_task,
         }
-    }
-
-    fn estimate_sizes(items: &[ChatItem]) -> Vec<Size<Pixels>> {
-        items
-            .iter()
-            .map(|item| Size {
-                width: px(0.),
-                height: item.estimated_height(),
-            })
-            .collect()
     }
 
     fn measure_all_items(&mut self, width: Pixels, window: &mut Window, cx: &mut Context<Self>) {
@@ -295,131 +469,276 @@ impl ChatSessionView {
         }
     }
 
-    fn replay_stream(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(state) = self
-            .markdown_states
-            .get(&self.streaming_message_id.to_string())
-        {
-            state.update(cx, |state, cx| {
-                state.set_text("", cx);
-            });
-        }
-
-        let tx = self.stream_tx.clone();
-        self._update_task = cx.background_executor().spawn(async move {
-            let chars: Vec<char> = STREAM_REPLY.chars().collect();
-            let mut current = 0;
-            let chunk_size = 12usize;
-
-            while current < chars.len() {
-                let take = chunk_size.min(chars.len() - current);
-                let chunk: String = chars[current..current + take].iter().collect();
-                _ = tx.try_send(chunk);
-                current += take;
-                std::thread::sleep(std::time::Duration::from_millis(400));
-            }
-        });
+    fn clear_stream_state(&mut self) {
+        self.streaming_role = None;
+        self.active_user_index = None;
+        self.active_assistant_index = None;
+        self.tool_call_index.clear();
+        self.tool_call_cache.clear();
     }
 
-    fn sample_items() -> Vec<ChatItem> {
-        vec![
-            ChatItem::Message(ChatMessage {
-                id: 0,
-                role: ChatRole::User,
-                author: "男生".to_string(),
-                badge: None,
-                content: "请用通俗语言解释相对论，并给出一个 5 分钟讲解稿。".to_string(),
+    fn handle_codex_event(&mut self, event: UiEvent, cx: &mut Context<Self>) {
+        match event {
+            UiEvent::SessionUpdate(update) => self.apply_session_update(update, cx),
+            UiEvent::PromptFinished(stop_reason) => {
+                self.is_generating = false;
+                self.status_line = format!("Completed: {stop_reason:?}");
+                cx.notify();
+            }
+            UiEvent::SystemMessage(message) => {
+                self.status_line = message;
+                cx.notify();
+            }
+        }
+    }
+
+    fn apply_session_update(&mut self, update: SessionUpdate, cx: &mut Context<Self>) {
+        match update {
+            SessionUpdate::UserMessageChunk(chunk) => {
+                let text = content_block_to_text(&chunk.content);
+                if !text.is_empty() {
+                    self.append_message_chunk(ChatRole::User, &text, cx);
+                }
+            }
+            SessionUpdate::AgentMessageChunk(chunk) => {
+                let text = content_block_to_text(&chunk.content);
+                if !text.is_empty() {
+                    self.append_message_chunk(ChatRole::Assistant, &text, cx);
+                }
+            }
+            SessionUpdate::AgentThoughtChunk(chunk) => {
+                let text = content_block_to_text(&chunk.content);
+                if !text.is_empty() {
+                    self.append_thought_chunk(&text, cx);
+                }
+            }
+            SessionUpdate::ToolCall(tool_call) => {
+                self.upsert_tool_call(tool_call, cx);
+            }
+            SessionUpdate::ToolCallUpdate(update) => {
+                self.apply_tool_call_update(update, cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_generating {
+            return;
+        }
+
+        let text = self.input_state.read(cx).value();
+        let content = text.trim();
+        if content.is_empty() {
+            return;
+        }
+
+        let user_message = ChatMessage {
+            id: self.items.len(),
+            role: ChatRole::User,
+            author: "You".to_string(),
+            badge: None,
+            content: content.to_string(),
+            thinking: None,
+            tool_calls: Vec::new(),
+            attachments: Vec::new(),
+            thoughts_open: false,
+            tools_open: false,
+        };
+        self.push_message(user_message, cx);
+
+        self.input_state
+            .update(cx, |input, cx| input.set_value("", window, cx));
+
+        self.status_line = "Sending to Codex...".to_string();
+        self.is_generating = true;
+        self.clear_stream_state();
+
+        if self
+            .codex_commands
+            .send(CodexCommand::Prompt(content.to_string()))
+            .is_err()
+        {
+            self.status_line = "Failed to send prompt to Codex".to_string();
+            self.is_generating = false;
+        }
+
+        self.scroll_handle.scroll_to_bottom();
+        cx.notify();
+    }
+
+    fn append_message_chunk(&mut self, role: ChatRole, text: &str, cx: &mut Context<Self>) {
+        let target_index = match role {
+            ChatRole::User => self.active_user_index,
+            ChatRole::Assistant => self.active_assistant_index,
+        };
+
+        let index = if self.streaming_role == Some(role) && target_index.is_some() {
+            target_index.unwrap()
+        } else {
+            let message = ChatMessage {
+                id: self.items.len(),
+                role,
+                author: if role == ChatRole::User {
+                    "You".to_string()
+                } else {
+                    "codex".to_string()
+                },
+                badge: if role == ChatRole::Assistant {
+                    Some("ACP".to_string())
+                } else {
+                    None
+                },
+                content: String::new(),
                 thinking: None,
                 tool_calls: Vec::new(),
                 attachments: Vec::new(),
                 thoughts_open: false,
                 tools_open: false,
-            }),
-            ChatItem::Message(ChatMessage {
-                id: 1,
-                role: ChatRole::Assistant,
-                author: "manus".to_string(),
-                badge: Some("Lite".to_string()),
-                content: r#"我已经为你生成了音频与讲解稿，内容包含：
+            };
+            let new_index = self.push_message(message, cx);
+            self.streaming_role = Some(role);
+            match role {
+                ChatRole::User => self.active_user_index = Some(new_index),
+                ChatRole::Assistant => {
+                    self.active_assistant_index = Some(new_index);
+                    self.tool_call_index.clear();
+                    self.tool_call_cache.clear();
+                }
+            }
+            new_index
+        };
 
-1. **狭义相对论**：解释光速不变与惯性系等价。
-2. **时间膨胀**：高速运动会让时间“变慢”。
-3. **广义相对论**：引力可以理解为时空弯曲。
+        self.append_to_message(index, text, cx);
+        if role == ChatRole::Assistant {
+            self.scroll_handle.scroll_to_bottom();
+        }
+    }
 
-如果你需要更长版本或配图说明，告诉我即可。"#
-                    .to_string(),
-                thinking: Some(
-                    "先给出直觉解释，再通过例子联系日常经验。保持结构清晰，避免公式。".to_string(),
-                ),
-                tool_calls: vec![
-                    ToolCall {
-                        name: "audio.generate".to_string(),
-                        status: ToolStatus::Success,
-                        duration: "1.4s".to_string(),
-                        args: r#"{"voice":"male","style":"lecture","length":"5min"}"#.to_string(),
-                        output: "生成 audio/relativity_explanation.wav".to_string(),
-                    },
-                    ToolCall {
-                        name: "doc.summarize".to_string(),
-                        status: ToolStatus::Success,
-                        duration: "520ms".to_string(),
-                        args: r#"{"source":"relativity.md","format":"bullet"}"#.to_string(),
-                        output: "提取 3 个核心要点".to_string(),
-                    },
-                ],
-                attachments: vec![
-                    FileAttachment {
-                        name: "relativity_explanation.wav".to_string(),
-                        size: "10.7 MB".to_string(),
-                        kind: "Audio".to_string(),
-                    },
-                    FileAttachment {
-                        name: "relativity_script.md".to_string(),
-                        size: "3.0 KB".to_string(),
-                        kind: "Markdown".to_string(),
-                    },
-                ],
-                thoughts_open: false,
-                tools_open: false,
-            }),
-            ChatItem::Message(ChatMessage {
-                id: 2,
-                role: ChatRole::User,
-                author: "男生".to_string(),
-                badge: None,
-                content: "再简短一些，用要点列表输出。".to_string(),
-                thinking: None,
-                tool_calls: Vec::new(),
-                attachments: Vec::new(),
-                thoughts_open: false,
-                tools_open: false,
-            }),
-            ChatItem::Message(ChatMessage {
-                id: 3,
-                role: ChatRole::Assistant,
-                author: "manus".to_string(),
-                badge: Some("Lite".to_string()),
-                content: r#"我已经为你生成了音频与讲解稿，内容包含：
+    fn append_thought_chunk(&mut self, text: &str, cx: &mut Context<Self>) {
+        let index = self.ensure_assistant_message(cx);
+        let ChatItem::Message(message) = &mut self.items[index];
+        let thinking = message.thinking.get_or_insert_with(String::new);
+        thinking.push_str(text);
+        if !self.pending_remeasure.contains(&index) {
+            self.pending_remeasure.push(index);
+        }
+        cx.notify();
+    }
 
-1. **狭义相对论**：解释光速不变与惯性系等价。
-2. **时间膨胀**：高速运动会让时间“变慢”。
-3. **广义相对论**：引力可以理解为时空弯曲。
+    fn ensure_assistant_message(&mut self, cx: &mut Context<Self>) -> usize {
+        if let Some(index) = self.active_assistant_index {
+            return index;
+        }
 
-如果你需要更长版本或配图说明，告诉我即可。"#
-                    .to_string(),
-                thinking: Some("等待用户触发流式演示，然后逐段输出。".to_string()),
-                tool_calls: vec![ToolCall {
-                    name: "tools.status".to_string(),
-                    status: ToolStatus::Running,
-                    duration: "—".to_string(),
-                    args: r#"{"mode":"stream","target":"assistant_reply"}"#.to_string(),
-                    output: "等待开始...".to_string(),
-                }],
-                attachments: Vec::new(),
-                thoughts_open: false,
-                tools_open: true,
-            }),
-        ]
+        let message = ChatMessage {
+            id: self.items.len(),
+            role: ChatRole::Assistant,
+            author: "codex".to_string(),
+            badge: Some("ACP".to_string()),
+            content: String::new(),
+            thinking: None,
+            tool_calls: Vec::new(),
+            attachments: Vec::new(),
+            thoughts_open: false,
+            tools_open: false,
+        };
+        let index = self.push_message(message, cx);
+        self.active_assistant_index = Some(index);
+        self.streaming_role = Some(ChatRole::Assistant);
+        self.tool_call_index.clear();
+        self.tool_call_cache.clear();
+        index
+    }
+
+    fn upsert_tool_call(&mut self, tool_call: ToolCall, cx: &mut Context<Self>) {
+        let id = tool_call.tool_call_id.0.to_string();
+        self.tool_call_cache.insert(id.clone(), tool_call.clone());
+        self.update_tool_call_ui(&id, tool_call, cx);
+    }
+
+    fn apply_tool_call_update(&mut self, update: ToolCallUpdate, cx: &mut Context<Self>) {
+        let id = update.tool_call_id.0.to_string();
+        let updated = if let Some(mut existing) = self.tool_call_cache.remove(&id) {
+            existing.update(update.fields.clone());
+            existing
+        } else {
+            ToolCall::try_from(update.clone()).unwrap_or_else(|_| {
+                let mut fallback = ToolCall::new(update.tool_call_id.clone(), "Tool Call");
+                fallback.update(update.fields.clone());
+                fallback
+            })
+        };
+        self.tool_call_cache.insert(id.clone(), updated.clone());
+        self.update_tool_call_ui(&id, updated, cx);
+    }
+
+    fn update_tool_call_ui(&mut self, id: &str, tool_call: ToolCall, cx: &mut Context<Self>) {
+        let index = self.ensure_assistant_message(cx);
+        let ChatItem::Message(message) = &mut self.items[index];
+        let ui_tool_call = map_tool_call(id, &tool_call);
+
+        if let Some(existing_index) = self.tool_call_index.get(id).copied() {
+            if let Some(existing) = message.tool_calls.get_mut(existing_index) {
+                *existing = ui_tool_call;
+            }
+        } else {
+            message.tool_calls.push(ui_tool_call);
+            self.tool_call_index
+                .insert(id.to_string(), message.tool_calls.len() - 1);
+        }
+
+        if !self.pending_remeasure.contains(&index) {
+            self.pending_remeasure.push(index);
+        }
+        cx.notify();
+    }
+
+    fn push_message(&mut self, message: ChatMessage, cx: &mut Context<Self>) -> usize {
+        let index = self.items.len();
+        let item = ChatItem::Message(message);
+
+        let ChatItem::Message(message) = &item;
+        if message.role == ChatRole::Assistant {
+            let state = MarkdownState::new(&message.content, cx);
+            let message_id = index;
+            cx.observe(state.entity(), move |this: &mut Self, _, cx| {
+                if !this.pending_remeasure.contains(&message_id) {
+                    this.pending_remeasure.push(message_id);
+                }
+                cx.notify();
+            })
+            .detach();
+            self.markdown_states.insert(message_id.to_string(), state);
+        }
+
+        self.items.push(item);
+        let mut sizes = (*self.item_sizes).clone();
+        sizes.push(Size {
+            width: px(0.),
+            height: self.items[index].estimated_height(),
+        });
+        self.item_sizes = Rc::new(sizes);
+        self.measured = false;
+        index
+    }
+
+    fn append_to_message(&mut self, index: usize, text: &str, cx: &mut Context<Self>) {
+        let ChatItem::Message(message) = &mut self.items[index];
+        message.content.push_str(text);
+
+        if message.role == ChatRole::Assistant {
+            if let Some(state) = self.markdown_states.get(&index.to_string()) {
+                state.update(cx, |state, cx| {
+                    state.push_str(text, cx);
+                });
+            }
+        }
+
+        if !self.pending_remeasure.contains(&index) {
+            self.pending_remeasure.push(index);
+        }
+        cx.notify();
     }
 }
 
@@ -454,7 +773,7 @@ impl Render for ChatSessionView {
                             .gap_1()
                             .child(Label::new("Chat Session").text_xl().font_semibold())
                             .child(
-                                Label::new("相对论讲解 / 演示对话")
+                                Label::new(self.status_line.clone())
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground),
                             ),
@@ -462,16 +781,7 @@ impl Render for ChatSessionView {
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(Tag::secondary().small().child("GPT-4o mini"))
-                            .child(
-                                Button::new("stream-reply")
-                                    .small()
-                                    .outline()
-                                    .label("Stream Reply")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.replay_stream(window, cx);
-                                    })),
-                            )
+                            .child(Tag::secondary().small().child("Codex ACP"))
                             .child(
                                 Button::new("scroll-bottom")
                                     .small()
@@ -628,7 +938,10 @@ impl Render for ChatSessionView {
                                     .xsmall()
                                     .primary()
                                     .icon(IconName::ArrowUp)
-                                    .rounded_full(),
+                                    .rounded_full()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.send_message(window, cx);
+                                    })),
                             ),
                     ),
             )
@@ -845,7 +1158,7 @@ fn build_attachments(attachments: &[FileAttachment], theme: &gpui_component::The
     v_flex().gap_2().children(cards).into_any_element()
 }
 
-fn build_tool_call_card(tool: &ToolCall, theme: &gpui_component::Theme) -> AnyElement {
+fn build_tool_call_card(tool: &ChatToolCall, theme: &gpui_component::Theme) -> AnyElement {
     let status_tag = match tool.status {
         ToolStatus::Running => Tag::info().small().child("Running"),
         ToolStatus::Success => Tag::success().small().child("Success"),
@@ -905,6 +1218,78 @@ fn build_tool_call_card(tool: &ToolCall, theme: &gpui_component::Theme) -> AnyEl
                 ),
         )
         .into_any_element()
+}
+
+fn map_tool_call(id: &str, tool_call: &ToolCall) -> ChatToolCall {
+    ChatToolCall {
+        id: id.to_string(),
+        name: tool_call.title.clone(),
+        status: map_tool_status(tool_call.status),
+        duration: "—".to_string(),
+        args: tool_call
+            .raw_input
+            .as_ref()
+            .map(format_json)
+            .unwrap_or_else(|| tool_call_content_to_text(&tool_call.content)),
+        output: tool_call
+            .raw_output
+            .as_ref()
+            .map(format_json)
+            .unwrap_or_else(|| String::new()),
+    }
+}
+
+fn map_tool_status(status: ToolCallStatus) -> ToolStatus {
+    match status {
+        ToolCallStatus::Pending | ToolCallStatus::InProgress => ToolStatus::Running,
+        ToolCallStatus::Completed => ToolStatus::Success,
+        ToolCallStatus::Failed => ToolStatus::Failed,
+        _ => ToolStatus::Running,
+    }
+}
+
+fn format_json(value: &serde_json::Value) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
+fn tool_call_content_to_text(content: &[ToolCallContent]) -> String {
+    let mut output = String::new();
+    for item in content {
+        let chunk = match item {
+            ToolCallContent::Content(content) => content_block_to_text(&content.content),
+            ToolCallContent::Diff(diff) => format!(
+                "Diff: {} ({} chars)",
+                diff.path.display(),
+                diff.new_text.len()
+            ),
+            ToolCallContent::Terminal(terminal) => format!("Terminal: {}", terminal.terminal_id),
+            _ => String::new(),
+        };
+        if !chunk.is_empty() {
+            output.push_str(&chunk);
+            if !output.ends_with('\n') {
+                output.push('\n');
+            }
+        }
+    }
+    output.trim_end().to_string()
+}
+
+fn content_block_to_text(content: &ContentBlock) -> String {
+    match content {
+        ContentBlock::Text(text) => text.text.clone(),
+        ContentBlock::Image(image) => format!("[image: {}]", image.mime_type),
+        ContentBlock::Audio(audio) => format!("[audio: {}]", audio.mime_type),
+        ContentBlock::ResourceLink(link) => format!("{} ({})", link.name, link.uri),
+        ContentBlock::Resource(resource) => match &resource.resource {
+            EmbeddedResourceResource::TextResourceContents(text) => text.text.clone(),
+            EmbeddedResourceResource::BlobResourceContents(blob) => {
+                format!("[resource: {}]", blob.uri)
+            }
+            _ => String::new(),
+        },
+        _ => String::new(),
+    }
 }
 
 fn main() {

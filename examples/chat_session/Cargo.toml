@@ -11,6 +11,34 @@ gpui.workspace = true
 gpui-component = { workspace = true }
 gpui-component-assets = { workspace = true }
 smol.workspace = true
+winres.workspace = true
+serde_json.workspace = true
+agent-client-protocol = { version = "=0.9.3", features = ["unstable"] }
+async-trait = "0.1"
+codex-acp = { git = "https://github.com/sxhxliang/codex-acp", branch = "acp-gpui" }
+codex-core = { git = "https://github.com/sxhxliang/codex", branch = "acp-gpui" }
+tokio = { version = "1", features = ["rt", "macros", "io-util", "sync"] }
+tokio-util = { version = "0.7", features = ["compat"] }
 
 [lints]
 workspace = true
+
+[profile.dev]
+opt-level = 1            # 轻量优化，平衡编译速度和文件大小
+codegen-units = 16       # 保持快速编译
+debug = "limited"        # 有限的调试信息
+split-debuginfo = "unpacked"
+strip = "debuginfo"      # 移除调试信息但保留符号表
+
+[profile.dev.package]
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+
+[profile.release]
+opt-level = "z"          # 优化目标为大小 (size optimization)
+lto = "fat"              # 完整的链接时优化 (full LTO)
+codegen-units = 1        # 最小化编译单元以获得最佳优化
+strip = true             # 自动移除符号和调试信息
+panic = "abort"          # 使用 abort 代替 unwind，减少二进制大小

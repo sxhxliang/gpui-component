@@ -13,7 +13,6 @@ members = [
     "examples/dialog_overlay",
     "examples/webview",
     "examples/system_monitor",
-    "examples/ai_folder",
     "examples/mixed_virtual_list",
     "examples/chat_session",
 ]
@@ -60,6 +59,12 @@ serde_repr = "0.1"
 smallvec = "1"
 smol = "2"
 tracing = "0.1.41"
+winres = "0.1.12"
+[patch.crates-io]
+tokio-tungstenite = { git = "https://github.com/JakkuSakura/tokio-tungstenite", branch = "proxy-support" }
+
+[patch.'ssh://git@github.com/JakkuSakura/tungstenite-rs.git']
+tungstenite = { git = "https://github.com/JakkuSakura/tungstenite-rs", branch = "proxy-support" }
 
 [workspace.dependencies.windows]
 features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"]
