@@ -91,6 +91,7 @@ impl ChatItem {
         match self {
             ChatItem::Message(message) => {
                 let mut height = px(120.);
+                height += px(16.);
                 let line_count = message.content.lines().count().max(1) as f32;
                 height += px(line_count * 20.);
 
@@ -137,7 +138,7 @@ impl ChatItem {
     ) -> Size<Pixels> {
         let element = match self {
             ChatItem::Message(message) => {
-                build_message_element(message, theme, markdown_state, None, None)
+                build_chat_item_element(message, theme, markdown_state, None, None)
             }
         };
 
@@ -1125,6 +1126,7 @@ impl Render for ChatSessionView {
                 .w(px(260.))
                 .min_w(px(220.))
                 .max_w(px(320.))
+                .h_full()
                 .gap_2()
                 .p_3()
                 .border_1()
@@ -1243,6 +1245,7 @@ impl Render for ChatSessionView {
             let session_id_for_list = session_id.clone();
             div()
                 .flex_1()
+                .min_h_0()
                 .w_full()
                 .border_1()
                 .border_color(cx.theme().border)
@@ -1326,7 +1329,7 @@ impl Render for ChatSessionView {
                                             )
                                         };
 
-                                        let element = build_message_element(
+                                        let element = build_chat_item_element(
                                             message,
                                             &theme,
                                             markdown_state,
@@ -1339,6 +1342,7 @@ impl Render for ChatSessionView {
                                                 .id(ElementId::Name(
                                                     format!("chat-item-{}", ix).into(),
                                                 ))
+                                                .w_full()
                                                 .child(element),
                                         );
                                     }
@@ -1356,6 +1360,7 @@ impl Render for ChatSessionView {
         } else {
             div()
                 .flex_1()
+                .min_h_0()
                 .w_full()
                 .border_1()
                 .border_color(cx.theme().border)
@@ -1390,6 +1395,8 @@ impl Render for ChatSessionView {
         h_flex().size_full().gap_4().p_4().child(sidebar).child(
             v_flex()
                 .flex_1()
+                .min_h_0()
+                .h_full()
                 .gap_3()
                 .child(
                     h_flex()
@@ -1744,6 +1751,26 @@ fn build_message_element(
     }
 }
 
+fn build_chat_item_element(
+    message: &ChatMessage,
+    theme: &gpui_component::Theme,
+    markdown_state: Option<&MarkdownState>,
+    thoughts_header: Option<AnyElement>,
+    tools_header: Option<AnyElement>,
+) -> AnyElement {
+    div()
+        .w_full()
+        .py_2()
+        .child(build_message_element(
+            message,
+            theme,
+            markdown_state,
+            thoughts_header,
+            tools_header,
+        ))
+        .into_any_element()
+}
+
 fn build_attachments(attachments: &[FileAttachment], theme: &gpui_component::Theme) -> AnyElement {
     let cards = attachments.iter().map(|file| {
         h_flex()
@@ -1771,12 +1798,23 @@ fn build_attachments(attachments: &[FileAttachment], theme: &gpui_component::The
     v_flex().gap_2().children(cards).into_any_element()
 }
 
+struct ToolCallSummary {
+    label: String,
+    icon: IconName,
+}
+
 fn build_tool_call_card(tool: &ChatToolCall, theme: &gpui_component::Theme) -> AnyElement {
     let status_tag = match tool.status {
         ToolStatus::Running => Tag::info().small().child("Running"),
         ToolStatus::Success => Tag::success().small().child("Success"),
         ToolStatus::Failed => Tag::danger().small().child("Failed"),
     };
+
+    let summary = tool_call_summary(tool);
+    let header_label = summary
+        .as_ref()
+        .map(|summary| format!("{} {}", tool.name, summary.label))
+        .unwrap_or_else(|| tool.name.clone());
 
     let has_args = !tool.args.trim().is_empty();
     let has_output = !tool.output.trim().is_empty();
@@ -1828,7 +1866,7 @@ fn build_tool_call_card(tool: &ChatToolCall, theme: &gpui_component::Theme) -> A
         );
     }
 
-    v_flex()
+    let mut card = v_flex()
         .gap_2()
         .p_3()
         .bg(theme.background)
@@ -1839,8 +1877,8 @@ fn build_tool_call_card(tool: &ChatToolCall, theme: &gpui_component::Theme) -> A
             h_flex()
                 .items_center()
                 .gap_2()
-                .child(Icon::new(IconName::SquareTerminal).small())
-                .child(Label::new(tool.name.clone()).font_semibold())
+                .child(div().size_2().rounded_full().bg(theme.muted_foreground))
+                .child(Label::new(header_label).font_semibold())
                 .child(status_tag)
                 .child(div().flex_1())
                 .child(
@@ -1848,9 +1886,79 @@ fn build_tool_call_card(tool: &ChatToolCall, theme: &gpui_component::Theme) -> A
                         .text_xs()
                         .text_color(theme.muted_foreground),
                 ),
-        )
-        .child(details)
-        .into_any_element()
+        );
+
+    if let Some(summary) = summary {
+        card = card.child(
+            div()
+                .px_3()
+                .py_2()
+                .bg(theme.secondary)
+                .border_1()
+                .border_color(theme.border)
+                .rounded_md()
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(summary.icon).small())
+                        .child(Label::new(summary.label).text_sm()),
+                ),
+        );
+    }
+
+    card.child(details).into_any_element()
+}
+
+fn tool_call_summary(tool: &ChatToolCall) -> Option<ToolCallSummary> {
+    let args = tool.args.trim();
+    if args.is_empty() {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_str(args).ok()?;
+    let obj = value.as_object()?;
+
+    let path_keys = ["path", "file_path", "file", "filename", "target", "uri"];
+    for key in path_keys {
+        if let Some(label) = obj.get(key).and_then(|value| value.as_str()) {
+            return Some(ToolCallSummary {
+                label: truncate_label(label, 120),
+                icon: IconName::File,
+            });
+        }
+    }
+
+    let command_keys = ["command", "cmd", "shell", "run"];
+    for key in command_keys {
+        if let Some(label) = obj.get(key).and_then(|value| value.as_str()) {
+            return Some(ToolCallSummary {
+                label: truncate_label(label, 120),
+                icon: IconName::SquareTerminal,
+            });
+        }
+    }
+
+    for value in obj.values() {
+        if let Some(label) = value.as_str() {
+            return Some(ToolCallSummary {
+                label: truncate_label(label, 120),
+                icon: IconName::SquareTerminal,
+            });
+        }
+    }
+
+    None
+}
+
+fn truncate_label(label: &str, max_chars: usize) -> String {
+    if label.chars().count() <= max_chars {
+        return label.to_string();
+    }
+
+    let mut out = label.chars().take(max_chars.saturating_sub(3)).collect::<String>();
+    out.push_str("...");
+    out
 }
 
 fn map_tool_call(id: &str, tool_call: &ToolCall) -> ChatToolCall {
