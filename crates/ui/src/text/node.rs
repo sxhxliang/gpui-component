@@ -17,7 +17,7 @@ use crate::{
     ActiveTheme as _, Icon, IconName, StyledExt, h_flex,
     highlighter::{HighlightTheme, SyntaxHighlighter},
     text::{
-        CodeBlockActionsFn,
+        CodeBlockActionsFn, CodeBlockRendererFn,
         document::NodeRenderOptions,
         inline::{Inline, InlineState},
     },
@@ -547,6 +547,16 @@ impl CodeBlock {
     ) -> AnyElement {
         let style = &node_cx.style;
 
+        // Check if a custom renderer wants to handle this code block
+        if let Some(renderer) = node_cx.code_block_renderer.clone() {
+            if let Some(element) = renderer(self, window, cx) {
+                return div()
+                    .when(!options.is_last, |this| this.pb(style.paragraph_gap))
+                    .child(element)
+                    .into_any_element();
+            }
+        }
+
         div()
             .when(!options.is_last, |this| this.pb(style.paragraph_gap))
             .child(
@@ -591,6 +601,7 @@ pub(crate) struct NodeContext {
     pub(crate) link_refs: HashMap<SharedString, LinkMark>,
     pub(crate) style: TextViewStyle,
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    pub(crate) code_block_renderer: Option<Arc<CodeBlockRendererFn>>,
 }
 
 impl NodeContext {

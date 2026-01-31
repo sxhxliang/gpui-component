@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Mutex;
+
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable as _,
@@ -8,9 +12,68 @@ use gpui_component::{
     input::{Input, InputEvent, InputState, TabSize},
     resizable::{h_resizable, resizable_panel},
     text::markdown,
+    v_flex,
 };
 use gpui_component_assets::Assets;
 use gpui_component_story::Open;
+
+/// A cache for rendered mermaid diagrams to avoid re-rendering on each frame.
+/// Maps mermaid code hash to the path of the rendered SVG file.
+struct MermaidCache {
+    cache: Mutex<HashMap<u64, PathBuf>>,
+    temp_dir: PathBuf,
+}
+
+impl MermaidCache {
+    fn new() -> Self {
+        let temp_dir = std::env::temp_dir().join("gpui-mermaid-cache");
+        std::fs::create_dir_all(&temp_dir).ok();
+        Self {
+            cache: Mutex::new(HashMap::new()),
+            temp_dir,
+        }
+    }
+
+    fn hash_code(code: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        code.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn get_or_render(&self, code: &str) -> Option<PathBuf> {
+        let hash = Self::hash_code(code);
+
+        // Check cache first
+        {
+            let cache = self.cache.lock().unwrap();
+            if let Some(path) = cache.get(&hash) {
+                if path.exists() {
+                    return Some(path.clone());
+                }
+            }
+        }
+
+        // Render mermaid to SVG
+        let svg = mermaid_rs_renderer::render(code).ok()?;
+
+        // Save to temp file
+        let path = self.temp_dir.join(format!("{}.svg", hash));
+        std::fs::write(&path, &svg).ok()?;
+
+        // Update cache
+        {
+            let mut cache = self.cache.lock().unwrap();
+            cache.insert(hash, path.clone());
+        }
+
+        Some(path)
+    }
+}
+
+// Global mermaid cache
+static MERMAID_CACHE: std::sync::LazyLock<MermaidCache> =
+    std::sync::LazyLock::new(MermaidCache::new);
 
 pub struct Example {
     input_state: Entity<InputState>,
@@ -101,6 +164,30 @@ impl Render for Example {
                     .child(
                         resizable_panel().child(
                             markdown(self.input_state.read(cx).value().clone())
+                                .code_block_renderer(|code_block, _window, cx| {
+                                    let lang = code_block.lang();
+
+                                    // Only handle mermaid code blocks
+                                    if lang.as_ref().map(|l| l.as_ref()) != Some("mermaid") {
+                                        return None;
+                                    }
+
+                                    let code = code_block.code();
+                                    let svg_path = MERMAID_CACHE.get_or_render(code.as_ref())?;
+
+                                    // Return the rendered mermaid diagram as an image
+                                    Some(
+                                        v_flex()
+                                            .w_full()
+                                            .p_3()
+                                            .rounded(cx.theme().radius)
+                                            .bg(cx.theme().background)
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .child(img(svg_path).max_w_full())
+                                            .into_any_element(),
+                                    )
+                                })
                                 .code_block_actions(|code_block, _window, _cx| {
                                     let code = code_block.code();
                                     let lang = code_block.lang();
