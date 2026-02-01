@@ -15,6 +15,11 @@ gpui-component = { workspace = true, features = [
 ] }
 gpui-component-assets.workspace = true
 reqwest_client = { path = "../reqwest_client" }
+mermaid-rs-renderer = { version = "0.1.2", default-features = false }
+resvg = "0.45"
+usvg = "0.45"
+image = "0.25"
+smallvec = "1"
 
 autocorrect = "2.14.2"
 chrono = "0.4"
