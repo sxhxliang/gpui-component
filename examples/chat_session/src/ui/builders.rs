@@ -1,6 +1,9 @@
 //! Message UI builder functions for Codex-style layout.
 
-use gpui::{AnyElement, IntoElement, ParentElement, Styled};
+use gpui::{
+    AnyElement, App, AvailableSpace, IntoElement, ParentElement, Pixels, Size, Styled, Window,
+    div, size,
+};
 use gpui_component::{
     Icon, IconName, Sizable, StyledExt, h_flex, label::Label, text::MarkdownState,
     text::MarkdownView, v_flex,
@@ -126,7 +129,8 @@ pub fn build_user_message(message: &ChatMessage, theme: &gpui_component::Theme) 
 
     let content = Label::new(message.content.clone())
         .text_sm()
-        .text_color(theme.foreground);
+        .text_color(theme.foreground)
+        .whitespace_normal();
 
     let mut bubble = v_flex()
         .gap_2()
@@ -200,6 +204,7 @@ pub fn build_assistant_message(
             Label::new(message.content.clone())
                 .text_sm()
                 .text_color(theme.foreground)
+                .whitespace_normal()
                 .into_any_element()
         };
         content_stack = content_stack.child(text_content);
@@ -236,4 +241,136 @@ pub fn build_chat_item_element(
         .px(px(8.))
         .child(content)
         .into_any_element()
+}
+
+fn build_user_message_proxy(message: &ChatMessage, theme: &gpui_component::Theme) -> AnyElement {
+    use gpui::px;
+
+    let content = Label::new(message.content.clone())
+        .text_sm()
+        .text_color(theme.foreground)
+        .whitespace_normal();
+
+    let mut bubble = v_flex()
+        .gap_2()
+        .max_w(px(560.))
+        .px_4()
+        .py_3()
+        .bg(theme.secondary)
+        .rounded_lg()
+        .child(content);
+
+    if !message.attachments.is_empty() {
+        bubble = bubble.child(build_attachments(&message.attachments, theme));
+    }
+
+    h_flex()
+        .w_full()
+        .justify_end()
+        .child(bubble)
+        .into_any_element()
+}
+
+fn build_assistant_message_proxy(
+    message: &ChatMessage,
+    theme: &gpui_component::Theme,
+    markdown_state: Option<&MarkdownState>,
+) -> AnyElement {
+    use gpui::px;
+
+    let mut content_stack = v_flex().gap_2().max_w(px(640.));
+
+    if message.thinking.is_some() {
+        content_stack = content_stack.child(
+            h_flex()
+                .items_center()
+                .gap_2()
+                .py_1()
+                .child(
+                    Icon::new(IconName::LoaderCircle)
+                        .xsmall()
+                        .text_color(theme.muted_foreground),
+                )
+                .child(
+                    Label::new("Thought")
+                        .text_sm()
+                        .font_medium()
+                        .text_color(theme.foreground),
+                )
+                .child(
+                    Icon::new(IconName::Check)
+                        .xsmall()
+                        .text_color(theme.success),
+                ),
+        );
+    }
+
+    for tool in &message.tool_calls {
+        content_stack = content_stack.child(build_tool_call_line(tool, theme));
+    }
+
+    if !message.content.is_empty() {
+        let text_content: AnyElement = if let Some(state) = markdown_state {
+            MarkdownView::new(state)
+                .text_sm()
+                .text_color(theme.foreground)
+                .into_any_element()
+        } else {
+            Label::new(message.content.clone())
+                .text_sm()
+                .text_color(theme.foreground)
+                .whitespace_normal()
+                .into_any_element()
+        };
+        content_stack = content_stack.child(text_content);
+    }
+
+    if !message.attachments.is_empty() {
+        content_stack = content_stack.child(build_attachments(&message.attachments, theme));
+    }
+
+    h_flex()
+        .w_full()
+        .justify_start()
+        .child(content_stack)
+        .into_any_element()
+}
+
+fn build_chat_item_layout_proxy(
+    message: &ChatMessage,
+    theme: &gpui_component::Theme,
+    markdown_state: Option<&MarkdownState>,
+) -> AnyElement {
+    use gpui::px;
+
+    let content = if message.role == ChatRole::User {
+        build_user_message_proxy(message, theme)
+    } else {
+        build_assistant_message_proxy(message, theme, markdown_state)
+    };
+
+    div()
+        .w_full()
+        .py_2()
+        .px(px(8.))
+        .child(content)
+        .into_any_element()
+}
+
+/// Layout-proxy measurement for virtual list sizing.
+pub fn measure_chat_item_layout_proxy(
+    message: &ChatMessage,
+    theme: &gpui_component::Theme,
+    markdown_state: Option<&MarkdownState>,
+    available_width: Pixels,
+    window: &mut Window,
+    cx: &mut App,
+) -> Size<Pixels> {
+    let element = build_chat_item_layout_proxy(message, theme, markdown_state);
+    let mut any_element = element.into_any_element();
+    let available_space = size(
+        AvailableSpace::Definite(available_width),
+        AvailableSpace::MinContent,
+    );
+    any_element.layout_as_root(available_space, window, cx)
 }
