@@ -7,7 +7,7 @@ documentation = "https://docs.rs/gpui-component"
 homepage = "https://longbridge.github.io/gpui-component"
 repository = "https://github.com/longbridge/gpui-component"
 readme = "../../README.md"
-version = "0.5.0"
+version = "0.5.1"
 publish = true
 edition.workspace = true
 
@@ -37,6 +37,7 @@ tree-sitter-languages = [
     "dep:tree-sitter-jsdoc",
     "dep:tree-sitter-make",
     "dep:tree-sitter-md",
+    "dep:tree-sitter-php",
     "dep:tree-sitter-proto",
     "dep:tree-sitter-python",
     "dep:tree-sitter-ruby",
@@ -111,6 +112,7 @@ tree-sitter-jsdoc = { version = "0.23.2", optional = true }
 tree-sitter-json = "0.24.8"
 tree-sitter-make = { version = "1.1.1", optional = true }
 tree-sitter-md = { version = "0.5.1", optional = true }
+tree-sitter-php = { version = "0.24.2", optional = true }
 tree-sitter-proto = { version = "0.2.0", optional = true }
 tree-sitter-python = { version = "0.23.6", optional = true }
 tree-sitter-ruby = { version = "0.23.1", optional = true }
@@ -122,6 +124,9 @@ tree-sitter-toml-ng = { version = "0.7.0", optional = true }
 tree-sitter-typescript = { version = "0.23.2", optional = true }
 tree-sitter-yaml = { version = "0.7.1", optional = true }
 tree-sitter-zig = { version = "1.1.2", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-text = "=21.0.0"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
