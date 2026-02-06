@@ -10,6 +10,32 @@ This is an additional demonstration paragraph in English demonstrating more cont
 
 这是一个中文演示段落，用于展示更多的 [Markdown GFM] 内容。您可以在此尝试使用使用**粗体**、*斜体*和`代码`等样式。これは日本語のデモ段落です。Markdown の多言語サポートを示すためのテキストが含まれています。例えば、、**ボールド**、_イタリック_、および`コード`のスタイルなどを試すことができます。
 
+```mermaid
+gantt
+  title Plan
+  dateFormat  YYYY-MM-DD
+  section Alpha
+  Task A : done, a1, 2026-01-01, 5d
+  Task B : after a1, 3d
+```
+
+```mermaid
+flowchart LR
+    A[Start] --> B{Decision}
+    B -->|Yes| C[OK]
+    B -->|No| D[Cancel]
+    C --> E[End]
+    D --> E
+```
+
+```mermaid
+sequenceDiagram
+    Alice->>Bob: Hello Bob
+    Bob-->>Alice: Hi Alice
+    Alice->>Bob: How are you?
+    Bob-->>Alice: Good, thanks!
+```
+
 [Markdown GFM]: https://github.github.com/gfm/
 
 [^1]: This is a footnote example.

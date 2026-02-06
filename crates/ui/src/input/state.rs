@@ -845,6 +845,16 @@ impl InputState {
     }
 
     /// Return the (0-based) [`Position`] of the cursor.
+    /// Return current scroll offset.
+    pub fn scroll_offset(&self) -> Point<Pixels> {
+        self.scroll_handle.offset()
+    }
+
+    /// Set the scroll offset.
+    pub fn set_scroll_offset(&mut self, offset: Point<Pixels>) {
+        self.scroll_handle.set_offset(offset);
+    }
+
     pub fn cursor_position(&self) -> Position {
         let offset = self.cursor();
         self.text.offset_to_position(offset)
