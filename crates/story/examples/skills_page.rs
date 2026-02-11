@@ -1,6 +1,7 @@
-//! Skills Page - UI clone of a skills marketplace page.
+//! Skills Page - UI clone of a skills marketplace page with sidebar.
 //!
 //! This example demonstrates:
+//! - A left sidebar with navigation, collapsible thread folders, and user menu popover
 //! - A toolbar with search input, refresh and new skill buttons
 //! - Section headers with dividers
 //! - Two-column card grid layout with icons and action buttons
@@ -8,10 +9,11 @@
 
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Root, Sizable, StyledExt as _,
+    ActiveTheme, Anchor, Icon, IconName, Root, Sizable, StyledExt as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex,
     input::{Input, InputState},
+    popover::Popover,
     scroll::ScrollableElement as _,
     v_flex,
 };
@@ -29,6 +31,13 @@ pub struct SkillItem {
     pub icon: IconName,
     pub icon_bg: Hsla,
     pub icon_fg: Hsla,
+}
+
+#[derive(Clone)]
+pub struct ThreadItem {
+    pub title: &'static str,
+    pub time: &'static str,
+    pub selected: bool,
 }
 
 // ============================================================================
@@ -157,6 +166,61 @@ fn recommended_skills() -> Vec<SkillItem> {
     ]
 }
 
+fn agent_studio_threads() -> Vec<ThreadItem> {
+    vec![
+        ThreadItem {
+            title: "$new-component \u{521b}\u{5efa}agent_cli...",
+            time: "8h",
+            selected: false,
+        },
+        ThreadItem {
+            title: "\u{9075}\u{5faa}\u{5965}\u{5361}\u{59c6}\u{5243}\u{5200}\u{539f}\u{5219}\u{ff0c}\u{91cd}\u{65b0}\u{8bbe}\u{8ba1}\u{4e00}...",
+            time: "10h",
+            selected: true,
+        },
+        ThreadItem {
+            title: "$gpui-event \u{4f7f}\u{7528} event \u{673a}\u{5236}\u{4f18}...",
+            time: "11h",
+            selected: false,
+        },
+        ThreadItem {
+            title: "$skill-installer",
+            time: "11h",
+            selected: false,
+        },
+        ThreadItem {
+            title: "Checking agentx v0.2.4 (/home...",
+            time: "2d",
+            selected: false,
+        },
+        ThreadItem {
+            title: "running 1 test test src/core/eve...",
+            time: "2d",
+            selected: false,
+        },
+        ThreadItem {
+            title: "\u{5c06}\u{8f6f}\u{4ef6}\u{6253}\u{5305}\u{6210} macOS app \u{4e4b}\u{540e}\u{ff0c}...",
+            time: "3d",
+            selected: false,
+        },
+        ThreadItem {
+            title: "\u{5728} README \u{589e}\u{52a0}\u{652f}\u{6301}\u{7684} Agent \u{6839}...",
+            time: "5d",
+            selected: false,
+        },
+        ThreadItem {
+            title: "src/panels/task_panel/panel.rs ...",
+            time: "1w",
+            selected: false,
+        },
+        ThreadItem {
+            title: ".github/workflows/release.yml ...",
+            time: "1w",
+            selected: false,
+        },
+    ]
+}
+
 // ============================================================================
 // Main Component
 // ============================================================================
@@ -166,23 +230,423 @@ pub struct SkillsPage {
     search_state: Entity<InputState>,
     installed: Vec<SkillItem>,
     recommended: Vec<SkillItem>,
+    threads: Vec<ThreadItem>,
+    agent_studio_expanded: bool,
+    teleagent_expanded: bool,
+    user_menu_open: bool,
 }
 
 impl SkillsPage {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search_state = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Search skills")
-        });
+        let search_state =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search skills"));
 
         Self {
             focus_handle: cx.focus_handle(),
             search_state,
             installed: installed_skills(),
             recommended: recommended_skills(),
+            threads: agent_studio_threads(),
+            agent_studio_expanded: true,
+            teleagent_expanded: false,
+            user_menu_open: false,
         }
     }
 
-    /// Top toolbar: Refresh | Search | + New skill
+    // ========================================================================
+    // Sidebar
+    // ========================================================================
+
+    fn render_sidebar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        v_flex()
+            .w(px(280.))
+            .h_full()
+            .flex_shrink_0()
+            .border_r_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .child(self.render_sidebar_nav(cx))
+                    .child(self.render_threads_section(cx)),
+            )
+            .child(self.render_sidebar_bottom(cx))
+    }
+
+    fn render_sidebar_nav(&self, cx: &Context<Self>) -> impl IntoElement {
+        v_flex()
+            .px_3()
+            .pt_3()
+            .pb_1()
+            .gap(px(1.))
+            .child(self.render_nav_item("New thread", IconName::Copy, false, cx))
+            .child(self.render_nav_item(
+                "Automations",
+                IconName::LoaderCircle,
+                false,
+                cx,
+            ))
+            .child(self.render_nav_item("Skills", IconName::Settings, true, cx))
+    }
+
+    fn render_nav_item(
+        &self,
+        label: &'static str,
+        icon: IconName,
+        active: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+
+        div()
+            .id(SharedString::from(format!("nav-{}", label)))
+            .h_flex()
+            .w_full()
+            .h(px(34.))
+            .px_2()
+            .gap_2p5()
+            .items_center()
+            .rounded(px(6.))
+            .cursor_pointer()
+            .text_sm()
+            .when(active, |this| {
+                this.bg(theme.muted.opacity(0.5))
+                    .font_medium()
+                    .text_color(theme.foreground)
+            })
+            .when(!active, |this| {
+                this.text_color(theme.foreground)
+                    .hover(|this| this.bg(theme.muted.opacity(0.3)))
+            })
+            .child(
+                Icon::new(icon)
+                    .size(px(16.))
+                    .text_color(theme.muted_foreground),
+            )
+            .child(label)
+    }
+
+    fn render_threads_section(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        v_flex()
+            .w_full()
+            .px_3()
+            .pt_3()
+            .gap_1()
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .px_2()
+                    .pb_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Threads"),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                Icon::new(IconName::FolderOpen)
+                                    .size(px(14.))
+                                    .text_color(theme.muted_foreground),
+                            )
+                            .child(
+                                Icon::new(IconName::Menu)
+                                    .size(px(14.))
+                                    .text_color(theme.muted_foreground),
+                            ),
+                    ),
+            )
+            // Folder: agent-studio (collapsible)
+            .child(self.render_folder_group(
+                "agent-studio",
+                self.agent_studio_expanded,
+                true,
+                cx,
+            ))
+            // Folder: teleagent (collapsible)
+            .child(self.render_folder_group("teleagent", self.teleagent_expanded, false, cx))
+    }
+
+    fn render_folder_header(
+        &self,
+        name: &'static str,
+        expanded: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let icon = if expanded {
+            IconName::FolderOpen
+        } else {
+            IconName::Folder
+        };
+
+        div()
+            .id(SharedString::from(format!("folder-{}", name)))
+            .h_flex()
+            .w_full()
+            .h(px(32.))
+            .px_2()
+            .gap_2p5()
+            .items_center()
+            .rounded(px(6.))
+            .cursor_pointer()
+            .text_sm()
+            .text_color(theme.foreground)
+            .hover(|this| this.bg(theme.muted.opacity(0.3)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                match name {
+                    "agent-studio" => this.agent_studio_expanded = !this.agent_studio_expanded,
+                    "teleagent" => this.teleagent_expanded = !this.teleagent_expanded,
+                    _ => {}
+                }
+                cx.notify();
+            }))
+            .child(
+                Icon::new(icon)
+                    .size(px(15.))
+                    .text_color(theme.muted_foreground),
+            )
+            .child(name)
+    }
+
+    fn render_folder_group(
+        &self,
+        name: &'static str,
+        expanded: bool,
+        has_threads: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+
+        v_flex()
+            .w_full()
+            .gap(px(1.))
+            .child(self.render_folder_header(name, expanded, cx))
+            .when(expanded && has_threads, |this| {
+                this.children(
+                    self.threads
+                        .iter()
+                        .map(|thread| self.render_thread_item(thread, cx)),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!("show-more-{}", name)))
+                        .h_flex()
+                        .w_full()
+                        .h(px(30.))
+                        .pl(px(34.))
+                        .items_center()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .cursor_pointer()
+                        .hover(|this| this.text_color(theme.foreground))
+                        .child("Show more"),
+                )
+            })
+    }
+
+    fn render_thread_item(
+        &self,
+        thread: &ThreadItem,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let selected_bg: Hsla = gpui::rgb(0xfef9c3).into();
+
+        div()
+            .id(SharedString::from(format!("thread-{}", thread.title)))
+            .h_flex()
+            .w_full()
+            .h(px(32.))
+            .pl(px(34.))
+            .pr_2()
+            .gap_2()
+            .items_center()
+            .rounded(px(6.))
+            .cursor_pointer()
+            .when(thread.selected, |this| this.bg(selected_bg))
+            .when(!thread.selected, |this| {
+                this.hover(|this| this.bg(theme.muted.opacity(0.3)))
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .overflow_x_hidden()
+                    .text_ellipsis()
+                    .child(thread.title),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(thread.time),
+            )
+    }
+
+    fn render_sidebar_bottom(&self, cx: &Context<Self>) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .px_3()
+            .pb_2()
+            .gap_1()
+            .child(
+                Popover::new("user-menu-popover")
+                    .anchor(Anchor::TopLeft)
+                    .open(self.user_menu_open)
+                    .on_open_change(cx.listener(|this, open, _, cx| {
+                        this.user_menu_open = *open;
+                        cx.notify();
+                    }))
+                    .trigger(
+                        Button::new("sidebar-settings")
+                            .ghost()
+                            .icon(IconName::Settings)
+                            .label("Settings")
+                            .small(),
+                    )
+                    .content(|_, _, cx| {
+                        let theme = cx.theme();
+
+                        v_flex()
+                            .w(px(240.))
+                            .py_1()
+                            // User email
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .w_full()
+                                    .h(px(34.))
+                                    .px_3()
+                                    .gap_2p5()
+                                    .items_center()
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .child(
+                                        Icon::new(IconName::CircleUser)
+                                            .size(px(16.))
+                                            .text_color(theme.muted_foreground),
+                                    )
+                                    .child("mc2liang@gmail.com"),
+                            )
+                            // Team/org
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .w_full()
+                                    .h(px(34.))
+                                    .px_3()
+                                    .gap_2p5()
+                                    .items_center()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child(
+                                        Icon::new(IconName::Settings)
+                                            .size(px(16.))
+                                            .text_color(theme.muted_foreground),
+                                    )
+                                    .child("Indevs"),
+                            )
+                            // Divider
+                            .child(div().w_full().h(px(1.)).my_1().bg(theme.border))
+                            // Settings
+                            .child(
+                                div()
+                                    .id("menu-settings")
+                                    .h_flex()
+                                    .w_full()
+                                    .h(px(34.))
+                                    .px_3()
+                                    .gap_2p5()
+                                    .items_center()
+                                    .rounded(px(4.))
+                                    .text_sm()
+                                    .font_medium()
+                                    .text_color(theme.foreground)
+                                    .cursor_pointer()
+                                    .hover(|this| this.bg(theme.muted.opacity(0.3)))
+                                    .child(
+                                        Icon::new(IconName::Settings)
+                                            .size(px(16.))
+                                            .text_color(theme.muted_foreground),
+                                    )
+                                    .child("Settings"),
+                            )
+                            // Log out
+                            .child(
+                                div()
+                                    .id("menu-logout")
+                                    .h_flex()
+                                    .w_full()
+                                    .h(px(34.))
+                                    .px_3()
+                                    .gap_2p5()
+                                    .items_center()
+                                    .rounded(px(4.))
+                                    .text_sm()
+                                    .font_medium()
+                                    .text_color(theme.foreground)
+                                    .cursor_pointer()
+                                    .hover(|this| this.bg(theme.muted.opacity(0.3)))
+                                    .child(
+                                        Icon::new(IconName::ExternalLink)
+                                            .size(px(16.))
+                                            .text_color(theme.muted_foreground),
+                                    )
+                                    .child("Log out"),
+                            )
+                    }),
+            )
+    }
+
+    // ========================================================================
+    // Main content (Skills page)
+    // ========================================================================
+
+    fn render_content(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .bg(theme.background)
+            .child(
+                div()
+                    .w_full()
+                    .px_8()
+                    .pt_6()
+                    .child(self.render_toolbar(cx)),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .px_8()
+                    .pt_4()
+                    .pb_8()
+                    .gap_6()
+                    .child(self.render_title(cx))
+                    .child(self.render_installed_section(cx))
+                    .child(self.render_recommended_section(cx)),
+            )
+    }
+
     fn render_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
@@ -228,7 +692,6 @@ impl SkillsPage {
             )
     }
 
-    /// Title section: "Skills" heading + subtitle
     fn render_title(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
@@ -260,7 +723,6 @@ impl SkillsPage {
             )
     }
 
-    /// Section header with divider
     fn render_section_header(
         &self,
         label: &'static str,
@@ -278,15 +740,9 @@ impl SkillsPage {
                     .text_color(theme.foreground)
                     .child(label),
             )
-            .child(
-                div()
-                    .w_full()
-                    .h(px(1.))
-                    .bg(theme.border),
-            )
+            .child(div().w_full().h(px(1.)).bg(theme.border))
     }
 
-    /// Render a single skill card (installed variant with edit icon)
     fn render_installed_card(
         &self,
         skill: &SkillItem,
@@ -311,7 +767,6 @@ impl SkillsPage {
             .cursor_pointer()
             .hover(|this| this.bg(theme.muted.opacity(0.3)))
             .child(
-                // Icon container
                 div()
                     .size(px(40.))
                     .rounded(px(10.))
@@ -327,7 +782,6 @@ impl SkillsPage {
                     ),
             )
             .child(
-                // Text content
                 v_flex()
                     .gap(px(2.))
                     .flex_1()
@@ -351,18 +805,14 @@ impl SkillsPage {
                     ),
             )
             .child(
-                // Edit action
-                div()
-                    .flex_shrink_0()
-                    .child(
-                        Icon::new(IconName::Settings2)
-                            .size(px(16.))
-                            .text_color(theme.muted_foreground.opacity(0.6)),
-                    ),
+                div().flex_shrink_0().child(
+                    Icon::new(IconName::Settings2)
+                        .size(px(16.))
+                        .text_color(theme.muted_foreground.opacity(0.6)),
+                ),
             )
     }
 
-    /// Render a single skill card (recommended variant with + icon)
     fn render_recommended_card(
         &self,
         skill: &SkillItem,
@@ -387,7 +837,6 @@ impl SkillsPage {
             .cursor_pointer()
             .hover(|this| this.bg(theme.muted.opacity(0.3)))
             .child(
-                // Icon container
                 div()
                     .size(px(40.))
                     .rounded(px(10.))
@@ -403,7 +852,6 @@ impl SkillsPage {
                     ),
             )
             .child(
-                // Text content
                 v_flex()
                     .gap(px(2.))
                     .flex_1()
@@ -427,36 +875,28 @@ impl SkillsPage {
                     ),
             )
             .child(
-                // Plus action
-                div()
-                    .flex_shrink_0()
-                    .child(
-                        Icon::new(IconName::Plus)
-                            .size(px(16.))
-                            .text_color(theme.muted_foreground.opacity(0.6)),
-                    ),
+                div().flex_shrink_0().child(
+                    Icon::new(IconName::Plus)
+                        .size(px(16.))
+                        .text_color(theme.muted_foreground.opacity(0.6)),
+                ),
             )
     }
 
-    /// Render installed section: 2 cards side by side
     fn render_installed_section(&self, cx: &Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
             .gap_3()
             .child(self.render_section_header("Installed", cx))
             .child(
-                h_flex()
-                    .w_full()
-                    .gap_3()
-                    .children(
-                        self.installed
-                            .iter()
-                            .map(|skill| self.render_installed_card(skill, cx)),
-                    ),
+                h_flex().w_full().gap_3().children(
+                    self.installed
+                        .iter()
+                        .map(|skill| self.render_installed_card(skill, cx)),
+                ),
             )
     }
 
-    /// Render recommended section: 2-column grid
     fn render_recommended_section(&self, cx: &Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
@@ -470,7 +910,6 @@ impl SkillsPage {
                         row.iter()
                             .map(|skill| self.render_recommended_card(skill, cx)),
                     )
-                    // If odd number of items, add empty spacer for last row
                     .when(row.len() == 1, |this| {
                         this.child(div().flex_1().min_w(px(0.)))
                     })
@@ -488,33 +927,13 @@ impl Render for SkillsPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        v_flex()
+        h_flex()
             .id("skills-page")
             .track_focus(&self.focus_handle)
             .size_full()
             .bg(theme.background)
-            .child(
-                // Toolbar area (non-scrolling)
-                div()
-                    .w_full()
-                    .px_8()
-                    .pt_6()
-                    .child(self.render_toolbar(cx)),
-            )
-            .child(
-                // Scrollable content area
-                v_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .px_8()
-                    .pt_4()
-                    .pb_8()
-                    .gap_6()
-                    .child(self.render_title(cx))
-                    .child(self.render_installed_section(cx))
-                    .child(self.render_recommended_section(cx)),
-            )
+            .child(self.render_sidebar(cx))
+            .child(self.render_content(cx))
     }
 }
 
@@ -529,7 +948,7 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(1100.0), px(800.0)),
+                    size(px(1200.0), px(860.0)),
                     cx,
                 ))),
                 titlebar: Some(TitlebarOptions {
