@@ -10,7 +10,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ActiveTheme, IconName, Placement, Sizable, StyledExt as _, WindowExt as _,
+    ActiveTheme, FocusTrapElement as _, IconName, Placement, Sizable, StyledExt as _,
+    WindowExt as _,
     actions::Cancel,
     button::{Button, ButtonVariants as _},
     dialog::overlay_color,
@@ -170,30 +171,28 @@ impl RenderOnce for Sheet {
                     .h(size.height)
                     .bg(overlay_color(self.overlay, cx))
                     .when(self.overlay, |this| {
-                        this.when(placement == Placement::Bottom, |this| {
-                            this.window_control_area(WindowControlArea::Drag)
-                        })
-                        .on_any_mouse_down({
-                            let on_close = self.on_close.clone();
-                            move |event, window, cx| {
-                                if event.position.y < top {
-                                    return;
-                                }
+                        this.window_control_area(WindowControlArea::Drag)
+                            .on_any_mouse_down({
+                                let on_close = self.on_close.clone();
+                                move |event, window, cx| {
+                                    if event.position.y < top {
+                                        return;
+                                    }
 
-                                cx.stop_propagation();
-                                if self.overlay_closable && event.button == MouseButton::Left {
-                                    window.close_sheet(cx);
-                                    on_close(&ClickEvent::default(), window, cx);
+                                    cx.stop_propagation();
+                                    if self.overlay_closable && event.button == MouseButton::Left {
+                                        window.close_sheet(cx);
+                                        on_close(&ClickEvent::default(), window, cx);
+                                    }
                                 }
-                            }
-                        })
+                            })
                     })
                     .child(
                         v_flex()
                             .id("sheet")
-                            .tab_group()
                             .key_context(CONTEXT)
                             .track_focus(&self.focus_handle)
+                            .focus_trap("sheet", &self.focus_handle)
                             .on_action({
                                 let on_close = self.on_close.clone();
                                 move |_: &Cancel, window, cx| {

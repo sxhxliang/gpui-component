@@ -134,7 +134,8 @@ impl SelectStory {
                     )
                 }),
                 simple_select2: cx.new(|cx| {
-                    let mut select = SelectState::new(SearchableVec::new(vec![]), None, window, cx);
+                    let mut select = SelectState::new(SearchableVec::new(vec![]), None, window, cx)
+                        .searchable(true);
 
                     select.set_items(
                         SearchableVec::new(vec!["Rust", "Go", "C++", "JavaScript"]),
@@ -248,7 +249,7 @@ impl Render for SelectStory {
                     h_flex()
                         .border_1()
                         .border_color(cx.theme().input)
-                        .rounded_lg()
+                        .rounded(cx.theme().radius_lg)
                         .text_color(cx.theme().secondary_foreground)
                         .w_full()
                         .gap_1()

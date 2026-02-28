@@ -74,6 +74,8 @@ pub struct Example {
     line_number: bool,
     indent_guides: bool,
     soft_wrap: bool,
+    show_whitespaces: bool,
+    folding: bool,
     lsp_store: ExampleLspStore,
     _subscriptions: Vec<Subscription>,
     _lint_task: Task<()>,
@@ -728,6 +730,8 @@ impl Example {
             line_number: true,
             indent_guides: true,
             soft_wrap: false,
+            show_whitespaces: false,
+            folding: true,
             lsp_store,
             _subscriptions,
             _lint_task: Task::ready(()),
@@ -749,7 +753,7 @@ impl Example {
         let editor = self.editor.clone();
         let input_state = self.go_to_line_state.clone();
 
-        window.open_dialog(cx, move |dialog, window, cx| {
+        window.open_alert_dialog(cx, move |dialog, window, cx| {
             input_state.update(cx, |state, cx| {
                 let cursor_pos = editor.read(cx).cursor_position();
                 state.set_placeholder(
@@ -763,7 +767,6 @@ impl Example {
             dialog
                 .title("Go to line")
                 .child(Input::new(&input_state))
-                .confirm()
                 .on_ok({
                     let editor = editor.clone();
                     let input_state = input_state.clone();
@@ -987,6 +990,25 @@ impl Example {
             }))
     }
 
+    fn render_show_whitespaces_button(
+        &self,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        Button::new("show-whitespace")
+            .ghost()
+            .xsmall()
+            .when(self.show_whitespaces, |this| this.icon(IconName::Check))
+            .label("Show Whitespaces")
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.show_whitespaces = !this.show_whitespaces;
+                this.editor.update(cx, |state, cx| {
+                    state.set_show_whitespaces(this.show_whitespaces, window, cx);
+                });
+                cx.notify();
+            }))
+    }
+
     fn render_indent_guides_button(
         &self,
         _: &mut Window,
@@ -1001,6 +1023,21 @@ impl Example {
                 this.indent_guides = !this.indent_guides;
                 this.editor.update(cx, |state, cx| {
                     state.set_indent_guides(this.indent_guides, window, cx);
+                });
+                cx.notify();
+            }))
+    }
+
+    fn render_folding_button(&self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        Button::new("folding")
+            .ghost()
+            .xsmall()
+            .when(self.folding, |this| this.icon(IconName::Check))
+            .label("Folding")
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.folding = !this.folding;
+                this.editor.update(cx, |state, cx| {
+                    state.set_folding(this.folding, window, cx);
                 });
                 cx.notify();
             }))
@@ -1079,7 +1116,9 @@ impl Render for Example {
                                     .gap_3()
                                     .child(self.render_line_number_button(window, cx))
                                     .child(self.render_soft_wrap_button(window, cx))
-                                    .child(self.render_indent_guides_button(window, cx)),
+                                    .child(self.render_show_whitespaces_button(window, cx))
+                                    .child(self.render_indent_guides_button(window, cx))
+                                    .child(self.render_folding_button(window, cx)),
                             )
                             .child(self.render_go_to_line_button(window, cx)),
                     ),
@@ -1088,7 +1127,7 @@ impl Render for Example {
 }
 
 fn main() {
-    let app = Application::new().with_assets(Assets);
+    let app = gpui_platform::application().with_assets(Assets);
 
     app.run(move |cx| {
         gpui_component_story::init(cx);

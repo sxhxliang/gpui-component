@@ -4,6 +4,7 @@ use std::ops::Deref;
 mod anchored;
 mod element_ext;
 mod event;
+mod focus_trap;
 mod geometry;
 mod global_state;
 mod icon;
@@ -75,9 +76,11 @@ pub mod tree;
 
 pub use crate::Disableable;
 pub(crate) use anchored::*;
-pub use element_ext::ElementExt;
+pub use element_ext::*;
 pub use event::InteractiveElementExt;
+pub use focus_trap::FocusTrapElement;
 pub use geometry::*;
+pub use gpui_component_macros::icon_named;
 pub use icon::*;
 pub use index_path::IndexPath;
 pub use input::{Rope, RopeExt, RopeLines};
@@ -103,6 +106,7 @@ pub fn init(cx: &mut App) {
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector::init(cx);
     root::init(cx);
+    focus_trap::init(cx);
     color_picker::init(cx);
     date_picker::init(cx);
     dock::init(cx);

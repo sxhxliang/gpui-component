@@ -317,10 +317,10 @@ pub(crate) fn section(title: impl Into<SharedString>) -> StorySection {
         title: title.into(),
         sub_title: vec![],
         base: h_flex()
+            .w_full()
             .flex_wrap()
             .justify_center()
             .items_center()
-            .w_full()
             .gap_4(),
         children: vec![],
     }
@@ -470,6 +470,7 @@ impl StoryState {
             "ResizableStory" => story!(ResizableStory),
             "ScrollbarStory" => story!(ScrollbarStory),
             "SwitchStory" => story!(SwitchStory),
+            "DataTableStory" => story!(DataTableStory),
             "TableStory" => story!(TableStory),
             "LabelStory" => story!(LabelStory),
             "TooltipStory" => story!(TooltipStory),
@@ -477,6 +478,7 @@ impl StoryState {
             "SidebarStory" => story!(SidebarStory),
             "FormStory" => story!(FormStory),
             "NotificationStory" => story!(NotificationStory),
+            "ThemeColorsStory" => story!(ThemeColorsStory),
             _ => {
                 unreachable!("Invalid story klass: {}", self.story_klass)
             }
