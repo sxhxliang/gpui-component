@@ -119,6 +119,14 @@ SettingPage::new("General")
     ])
 ```
 
+### Icon
+
+```rust
+SettingPage::new("General")
+    .icon(IconName::Settings)
+    .groups(vec![...])
+```
+
 ### Default Open
 
 ```rust
@@ -216,6 +224,40 @@ SettingItem::new(
     SettingField::element(...)
 )
 .description(markdown("Rust doc for the `gpui-component` crate."))
+```
+
+### Disabled
+
+Use `disabled(true)` to render a setting item in a non-interactive state. The
+whole row is dimmed and the built-in field (Switch, Checkbox, Input, Dropdown,
+NumberInput) is automatically disabled.
+
+```rust
+SettingItem::new(
+    "Dark Mode",
+    SettingField::switch(...)
+)
+.description("Switch between light and dark themes.")
+.disabled(true)
+```
+
+For [SettingItem::render] custom items, the row is still dimmed automatically,
+but the renderer is responsible for honoring the disabled state on any
+interactive controls inside it via `options.disabled`:
+
+```rust
+SettingItem::render(|options, _, _| {
+    h_flex()
+        .child("Custom content")
+        .child(
+            Button::new("action")
+                .label("Action")
+                .with_size(options.size)
+                .disabled(options.disabled)
+        )
+        .into_any_element()
+})
+.disabled(true)
 ```
 
 ## Setting Fields
@@ -344,7 +386,7 @@ You may have a complex field that you want to reuse, you may want split the elem
 
 In this case, the [SettingFieldElement] trait can help you to create a custom field element.
 
-````rust
+```rust
 use gpui_component::setting::{SettingFieldElement, RenderOptions};
 
 struct OpenURLSettingField {
@@ -496,4 +538,3 @@ Settings::new("app-settings")
 [NumberFieldOptions]: https://docs.rs/gpui-component/latest/gpui_component/setting/struct.NumberFieldOptions.html
 [GroupBox]: ./group-box.md
 [Sizable]: https://docs.rs/gpui-component/latest/gpui_component/trait.Sizable.html
-````

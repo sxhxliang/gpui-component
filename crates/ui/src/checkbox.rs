@@ -1,13 +1,13 @@
 use std::{rc::Rc, time::Duration};
 
 use crate::{
-    icon::IconNamed, text::Text, v_flex, ActiveTheme, Disableable, FocusableExt, IconName,
-    Selectable, Sizable, Size, StyledExt as _,
+    ActiveTheme, Disableable, FocusableExt, IconName, Selectable, Sizable, Size, StyledExt as _,
+    icon::IconNamed, text::Text, tooltip::ComponentTooltip, v_flex,
 };
 use gpui::{
-    div, prelude::FluentBuilder as _, px, relative, rems, svg, Animation, AnimationExt, AnyElement,
-    App, Div, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window,
+    Animation, AnimationExt, AnyElement, App, Div, ElementId, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
+    Window, div, prelude::FluentBuilder as _, px, relative, rems, svg,
 };
 
 /// A Checkbox element.
@@ -24,6 +24,7 @@ pub struct Checkbox {
     tab_stop: bool,
     tab_index: isize,
     on_click: Option<Rc<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
+    tooltip: ComponentTooltip,
 }
 
 impl Checkbox {
@@ -41,7 +42,14 @@ impl Checkbox {
             on_click: None,
             tab_stop: true,
             tab_index: 0,
+            tooltip: ComponentTooltip::default(),
         }
+    }
+
+    /// Set tooltip text for the checkbox.
+    pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.tooltip.text = Some((tooltip.into(), None));
+        self
     }
 
     /// Set the label for the checkbox.
@@ -255,7 +263,7 @@ impl RenderOnce for Checkbox {
                         .rounded(radius)
                         .when(cx.theme().shadow && !self.disabled, |this| this.shadow_xs())
                         .map(|this| match checked {
-                            false => this.bg(cx.theme().background),
+                            false => this.bg(cx.theme().input_background()),
                             _ => this.bg(color),
                         })
                         .child(checkbox_check_icon(
@@ -270,7 +278,8 @@ impl RenderOnce for Checkbox {
                 .when(self.label.is_some() || !self.children.is_empty(), |this| {
                     this.child(
                         v_flex()
-                            .w_full()
+                            .flex_1()
+                            .overflow_hidden()
                             .line_height(relative(1.2))
                             .gap_1()
                             .map(|this| {
@@ -304,7 +313,8 @@ impl RenderOnce for Checkbox {
                             Self::handle_click(&on_click, checked, window, cx);
                         }
                     })
-                }),
+                })
+                .map(|this| self.tooltip.apply(this)),
         )
     }
 }

@@ -1,3 +1,4 @@
+use gpui::Corners;
 use std::{
     ops::Range,
     rc::Rc,
@@ -5,13 +6,16 @@ use std::{
 };
 
 use gpui::{
-    point, px, quad, App, BorderStyle, Bounds, CursorStyle, Edges, Element, ElementId,
-    GlobalElementId, Half, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    LayoutId, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, StyledText, TextLayout,
-    Window,
+    App, BorderStyle, Bounds, CursorStyle, Edges, Element, ElementId, GlobalElementId, Half,
+    HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, StyledText,
+    TextLayout, Window, point, px, quad,
 };
 
-use crate::{global_state::GlobalState, input::Selection, text::node::LinkMark, ActiveTheme};
+use crate::{
+    ActiveTheme, global_state::GlobalState, input::Selection, text::TextViewMultiClickKind,
+    text::node::LinkMark, text::selection::word_range_at,
+};
 
 /// A inline element used to render a inline text and support selectable.
 ///
@@ -49,7 +53,11 @@ impl Inline {
         links: Vec<(Range<usize>, LinkMark)>,
         highlights: Vec<(Range<usize>, HighlightStyle)>,
     ) -> Self {
-        let text = state.lock().unwrap().text.clone();
+        let text = state
+            .lock()
+            .map(|state| state.text.clone())
+            .unwrap_or_default();
+
         Self {
             id: id.into(),
             links: Rc::new(links),
@@ -82,7 +90,7 @@ impl Inline {
         window.paint_quad(gpui::PaintQuad {
             bounds,
             background: cx.theme().blue.alpha(0.01).into(),
-            corner_radii: gpui::Corners::default(),
+            corner_radii: Corners::default(),
             border_color: gpui::transparent_black(),
             border_style: BorderStyle::default(),
             border_widths: gpui::Edges::all(px(0.)),
@@ -92,6 +100,7 @@ impl Inline {
     fn layout_selections(
         &self,
         text_layout: &TextLayout,
+        bounds: &Bounds<Pixels>,
         window: &mut Window,
         cx: &mut App,
     ) -> (bool, bool, Option<Selection>) {
@@ -103,6 +112,25 @@ impl Inline {
         let is_selectable = text_view_state.is_selectable();
         if !text_view_state.has_selection() {
             return (is_selectable, false, None);
+        }
+
+        if text_view_state.is_all_selected() {
+            return (is_selectable, true, Some((0..self.text.len()).into()));
+        }
+
+        if let Some(selection) = text_view_state.multi_click_selection() {
+            return (
+                is_selectable,
+                true,
+                selection_for_multi_click(
+                    &self.text,
+                    text_layout,
+                    *bounds,
+                    selection.pos,
+                    selection.kind,
+                )
+                .map(Selection::from),
+            );
         }
 
         let Some((selection_start, selection_end)) = text_view_state.selection_points() else {
@@ -129,19 +157,16 @@ impl Inline {
                 }
             }
 
-            if point_in_text_selection(
-                pos,
-                char_width,
-                selection_start,
-                selection_end,
-                line_height,
-            ) {
+            if point_in_text_selection(pos, char_width, selection_start, selection_end, line_height)
+            {
                 if selection.is_none() {
                     selection = Some((offset..offset).into());
                 }
 
                 let next_offset = offset + c.len_utf8();
-                selection.as_mut().unwrap().end = next_offset;
+                if let Some(selection) = selection.as_mut() {
+                    selection.end = next_offset;
+                }
             }
 
             offset += c.len_utf8();
@@ -303,7 +328,9 @@ impl Element for Inline {
     ) {
         let current_view = window.current_view();
         let hitbox = prepaint;
-        let mut state = self.state.lock().unwrap();
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
 
         let text_layout = self.styled_text.layout().clone();
         self.styled_text
@@ -311,7 +338,7 @@ impl Element for Inline {
 
         // layout selections
         let (is_selectable, is_selection, selection) =
-            self.layout_selections(&text_layout, window, cx);
+            self.layout_selections(&text_layout, &bounds, window, cx);
 
         state.selection = selection;
 
@@ -327,6 +354,53 @@ impl Element for Inline {
 
         if let Some(selection) = &state.selection {
             Self::paint_selection(selection, &text_layout, &bounds, window, cx);
+        }
+
+        if is_selectable {
+            window.on_mouse_event({
+                let hitbox = hitbox.clone();
+                let text_layout = text_layout.clone();
+                let inline_state = self.state.clone();
+                let text = self.text.clone();
+                let text_view_state = GlobalState::global(cx).text_view_state().cloned();
+
+                move |event: &MouseDownEvent, phase, window, cx| {
+                    if !phase.bubble()
+                        || !hitbox.is_hovered(window)
+                        || event.button != MouseButton::Left
+                    {
+                        return;
+                    }
+
+                    let kind = match event.click_count {
+                        2 => TextViewMultiClickKind::Word,
+                        3 => TextViewMultiClickKind::Paragraph,
+                        _ => return,
+                    };
+
+                    let Some(range) = selection_for_multi_click(
+                        &text,
+                        &text_layout,
+                        hitbox.bounds,
+                        event.position,
+                        kind,
+                    ) else {
+                        return;
+                    };
+
+                    let selected_text = text[range.clone()].to_string();
+
+                    if let Ok(mut inline_state) = inline_state.lock() {
+                        inline_state.selection = Some(range.into());
+                    }
+                    if let Some(text_view_state) = &text_view_state {
+                        text_view_state.update(cx, |state, _| {
+                            state.set_multi_click_selection(event.position, kind, selected_text);
+                        });
+                    }
+                    cx.notify(current_view);
+                }
+            });
         }
 
         // mouse move, update hovered link
@@ -354,9 +428,17 @@ impl Element for Inline {
             window.on_mouse_event({
                 let links = self.links.clone();
                 let text_layout = text_layout.clone();
+                let hitbox = hitbox.clone();
+                let text_view_state = GlobalState::global(cx).text_view_state().cloned();
 
-                move |event: &MouseUpEvent, phase, _, cx| {
-                    if !bounds.contains(&event.position) || !phase.bubble() {
+                move |event: &MouseUpEvent, phase, window, cx| {
+                    if !phase.bubble() || !hitbox.is_hovered(window) {
+                        return;
+                    }
+                    if text_view_state
+                        .as_ref()
+                        .is_some_and(|state| state.read(cx).has_selection())
+                    {
                         return;
                     }
 
@@ -372,6 +454,28 @@ impl Element for Inline {
     }
 }
 
+fn selection_for_multi_click(
+    text: &str,
+    text_layout: &TextLayout,
+    bounds: Bounds<Pixels>,
+    pos: Point<Pixels>,
+    kind: TextViewMultiClickKind,
+) -> Option<std::ops::Range<usize>> {
+    if !bounds.contains(&pos) {
+        return None;
+    }
+
+    let offset = text_layout.index_for_position(pos).ok()?;
+
+    match kind {
+        TextViewMultiClickKind::Word => word_range_at(text, offset),
+        // Known limitation: a paragraph maps to a single Inline run here. When a
+        // paragraph embeds an inline image it is split into multiple Inline runs,
+        // so triple-click only selects the run on the clicked side of the image.
+        TextViewMultiClickKind::Paragraph => (!text.is_empty()).then_some(0..text.len()),
+    }
+}
+
 /// Check if a `pos` is within a `bounds`, considering multi-line selections.
 fn point_in_text_selection(
     pos: Point<Pixels>,
@@ -380,6 +484,7 @@ fn point_in_text_selection(
     selection_end: Point<Pixels>,
     line_height: Pixels,
 ) -> bool {
+    let point_in_line = |point: Point<Pixels>| point.y >= pos.y && point.y < pos.y + line_height;
     let top = selection_start.y.min(selection_end.y);
     let bottom = selection_start.y.max(selection_end.y);
     let x = pos.x + char_width.half();
@@ -389,26 +494,26 @@ fn point_in_text_selection(
         return false;
     }
 
-    let single_line = selection_start.y == selection_end.y;
-    if single_line {
+    // Treat the selection as single-line when both drag points fall within the
+    // same rendered line, even if their y coordinates differ inside that line.
+    if point_in_line(selection_start) && point_in_line(selection_end) {
         let left = selection_start.x.min(selection_end.x);
         let right = selection_start.x.max(selection_end.x);
-        // If it's a single line selection, just check horizontal bounds
         return x >= left && x <= right;
     }
 
-    let (top_x, bottom_x) = if selection_start.y < selection_end.y {
-        (selection_start.x, selection_end.x)
+    let (top_point, bottom_point) = if selection_start.y < selection_end.y {
+        (selection_start, selection_end)
     } else {
-        (selection_end.x, selection_start.x)
+        (selection_end, selection_start)
     };
-    let is_top_line = pos.y <= top && top < pos.y + line_height;
-    let is_bottom_line = pos.y <= bottom && bottom < pos.y + line_height;
+    let is_top_line = point_in_line(top_point);
+    let is_bottom_line = point_in_line(bottom_point);
 
     if is_top_line {
-        return x >= top_x;
+        return x >= top_point.x;
     } else if is_bottom_line {
-        return x <= bottom_x;
+        return x <= bottom_point.x;
     } else {
         return true;
     }
@@ -603,6 +708,66 @@ mod tests {
         ));
         assert!(!point_in_text_selection(
             point(px(80.), px(140.)),
+            char_width,
+            start,
+            end,
+            line_height
+        ));
+    }
+
+    #[test]
+    fn test_point_in_text_selection_same_visual_line_with_different_y() {
+        let line_height = px(20.);
+        let char_width = px(10.);
+        let start = point(px(100.), px(55.));
+        let end = point(px(60.), px(58.));
+
+        assert!(!point_in_text_selection(
+            point(px(40.), px(50.)),
+            char_width,
+            start,
+            end,
+            line_height
+        ));
+        assert!(point_in_text_selection(
+            point(px(70.), px(50.)),
+            char_width,
+            start,
+            end,
+            line_height
+        ));
+        assert!(!point_in_text_selection(
+            point(px(110.), px(50.)),
+            char_width,
+            start,
+            end,
+            line_height
+        ));
+    }
+
+    #[test]
+    fn test_point_in_text_selection_same_visual_line_with_reversed_y() {
+        let line_height = px(20.);
+        let char_width = px(10.);
+        let start = point(px(60.), px(58.));
+        let end = point(px(100.), px(55.));
+
+        assert!(!point_in_text_selection(
+            point(px(40.), px(50.)),
+            char_width,
+            start,
+            end,
+            line_height
+        ));
+        assert!(point_in_text_selection(
+            point(px(70.), px(50.)),
+            char_width,
+            start,
+            end,
+            line_height
+        ));
+        assert!(!point_in_text_selection(
+            point(px(110.), px(50.)),
             char_width,
             start,
             end,

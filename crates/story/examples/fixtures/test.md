@@ -1,5 +1,26 @@
 # Hello, **World**!
 
+## Task markers
+
+The custom `MarkerHighlighter` (an LSP-style semantic tokens provider)
+highlights these markers in the source editor on the left, each in a
+different color:
+
+- TODO: support nested task lists
+- FIXME: links with parentheses break parsing
+- XXX: revisit the table column-width heuristic
+- HACK: temporary workaround for footnote ordering
+- NOTE: math blocks require the `$$` fence
+
+It also catches markers inside inline `code` and fenced blocks:
+
+```rust
+fn render() {
+    // TODO: cache the parsed AST between frames
+    // FIXME: handle empty input without a panic
+}
+```
+
 Build Status [![Build Status](https://github.com/longbridge/gpui-component/actions/workflows/ci.yml/badge.svg)](https://github.com/longbridge/gpui-component/actions/workflows/ci.yml) of [GPUI Component](https://github.com/longbridge/gpui-component).
 
 This is first paragraph, there have **BOLD**, _italic_, and ~strikethrough~, `code` text [^1] [^2].
@@ -124,12 +145,16 @@ See the way the text is aligned, depending on the position of `':'`
 ### Bulleted List
 
 - Bullet 1, this is very long and needs to be wrapped to the next line, display should be wrapped to the next line as well.
+  Continuation paragraph that should appear below.
 - Bullet 2, the second bullet item is also long and needs to be wrapped to the next line.
   - Bullet 2.1
+    This is a deepth continuation paragraph.
     - Bullet 2.1.1
       - Bullet 2.1.1.1
     - Bullet 2.1.2
+
   - Bullet 2.2
+
 - Bullet 3
 
 ### Numbered List

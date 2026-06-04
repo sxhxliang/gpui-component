@@ -17,10 +17,10 @@ The [gpui-component-assets] crate provides a default bundled assets implementati
 
 To use the default bundled assets, you need to add the `gpui-component-assets` crate as a dependency in your `Cargo.toml`:
 
-```toml-vue
+```toml
 [dependencies]
-gpui-component = "{{ VERSION }}"
-gpui-component-assets = "{{ VERSION }}"
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 ```
 
 Then we need call the `with_assets` method when creating the GPUI application to register the asset source:
@@ -98,9 +98,8 @@ fn main() {
                 let view = cx.new(|_| Example);
                 // The first level on the window must be Root.
                 cx.new(|cx| Root::new(view, window, cx))
-            })?;
-
-            Ok::<_, anyhow::Error>(())
+            })
+            .expect("Failed to open window");
         })
         .detach();
     });

@@ -20,13 +20,12 @@ impl InputState {
         };
 
         let point = self.text.offset_to_point(self.cursor());
-        let row = point.row.saturating_sub(last_layout.visible_range.start);
-        let Some(line) = last_layout.lines.get(row) else {
+        let Some(line) = last_layout.line(point.row) else {
             self.preferred_column = None;
             return;
         };
 
-        let Some(pos) = line.position_for_index(point.column, last_layout) else {
+        let Some(pos) = line.position_for_index(point.column, last_layout, false) else {
             self.preferred_column = None;
             return;
         };
@@ -46,6 +45,7 @@ impl InputState {
         cx: &mut Context<Self>,
     ) {
         let offset = offset.clamp(0, self.text.len());
+        self.cursor_line_end_affinity = false;
         self.selected_range = (offset..offset).into();
         self.scroll_to(offset, direction, cx);
         self.pause_blink_cursor(cx);
@@ -99,8 +99,7 @@ impl InputState {
 
         if let Some((preferred_x, column)) = was_preferred_column {
             // Get display point again to update local_row.
-            let mut next_display_point =
-                self.display_map.offset_to_wrap_display_point(new_offset);
+            let mut next_display_point = self.display_map.offset_to_wrap_display_point(new_offset);
             next_display_point.column = 0;
             let next_point = self
                 .display_map
@@ -237,6 +236,7 @@ impl InputState {
         self.pause_blink_cursor(cx);
         let offset = self.end_of_line();
         self.move_to(offset, Some(MoveDirection::Down), cx);
+        self.cursor_line_end_affinity = true;
     }
 
     pub(super) fn move_to_start(

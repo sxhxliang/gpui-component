@@ -1,13 +1,14 @@
 use std::ops::Range;
+use gpui::Half;
 
 use gpui::{
-    App, Font, Half, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window, point, px,
+    App, Font, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window, point, px,
     size,
 };
 use ropey::Rope;
 use smallvec::SmallVec;
 
-use crate::input::{LastLayout, RopeExt, WhitespaceIndicators};
+use crate::input::{LastLayout, Point as TreeSitterPoint, RopeExt, WhitespaceIndicators};
 
 /// A line with soft wrapped lines info.
 #[derive(Debug, Clone)]
@@ -32,7 +33,6 @@ impl LineItem {
     pub(crate) fn lines_len(&self) -> usize {
         self.wrapped_lines.len()
     }
-
 }
 
 #[derive(Debug, Default)]
@@ -304,12 +304,12 @@ impl TextWrapper {
         return self.text.len();
     }
 
-    pub(crate) fn display_point_to_point(&self, point: WrapDisplayPoint) -> tree_sitter::Point {
+    pub(crate) fn display_point_to_point(&self, point: WrapDisplayPoint) -> TreeSitterPoint {
         let offset = self.display_point_to_offset(point);
         self.text.offset_to_point(offset)
     }
 
-    pub(crate) fn point_to_display_point(&self, point: tree_sitter::Point) -> WrapDisplayPoint {
+    pub(crate) fn point_to_display_point(&self, point: TreeSitterPoint) -> WrapDisplayPoint {
         let offset = self.text.point_to_offset(point);
         self.offset_to_display_point(offset)
     }
@@ -417,11 +417,14 @@ impl LineLayout {
     /// Get the position (x, y) for the given index in this line layout.
     ///
     /// - The `offset` is a local byte index in this line layout.
+    /// - When `line_end_affinity` is true, an offset at a soft wrap boundary is placed at
+    ///   the end of the current visual line rather than the start of the next one.
     /// - The return value is relative to the top-left corner of this line layout, start from (0, 0)
     pub(crate) fn position_for_index(
         &self,
         offset: usize,
         last_layout: &LastLayout,
+        line_end_affinity: bool,
     ) -> Option<Point<Pixels>> {
         let mut acc_len = 0;
         let mut offset_y = px(0.);
@@ -430,14 +433,26 @@ impl LineLayout {
 
         for (i, line) in self.wrapped_lines.iter().enumerate() {
             let is_last = i + 1 == self.wrapped_lines.len();
-            let line_len = if is_last { line.len + 1 } else { line.len };
 
-            let range = acc_len..(acc_len + line_len);
-            if range.contains(&offset) {
+            let matches = if line.len == 0 {
+                // Empty visual lines still own their boundary offset.
+                offset == acc_len
+            } else if is_last || line_end_affinity {
+                // Inclusive: cursor can sit at end of this visual line.
+                offset >= acc_len && offset <= acc_len + line.len
+            } else {
+                // Exclusive: boundary offset belongs to the next visual line.
+                offset >= acc_len && offset < acc_len + line.len
+            };
+
+            if matches {
                 let x = line.x_for_index(offset.saturating_sub(acc_len)) + x_offset;
                 return Some(point(x, offset_y));
             }
-            acc_len += line_len;
+
+            // Always advance by actual line length. The last line gets +1 so the
+            // cursor can be placed after the final character.
+            acc_len += if is_last { line.len + 1 } else { line.len };
             offset_y += last_layout.line_height;
         }
 
@@ -569,6 +584,8 @@ impl LineLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::rc::Rc;
+
     use gpui::{Boundary, FontFeatures, FontStyle, FontWeight, px};
 
     #[test]
@@ -778,6 +795,36 @@ mod tests {
         line_layout.set_wrapped_lines(wrapped_lines);
         assert_eq!(line_layout.len(), 150);
         assert_eq!(line_layout.wrapped_lines.len(), 2);
+    }
+
+    #[test]
+    fn test_position_for_index_prefers_first_leading_empty_visual_line() {
+        let mut line_layout = LineLayout::new();
+        line_layout.set_wrapped_lines(smallvec::smallvec![
+            ShapedLine::default(),
+            ShapedLine::default(),
+            ShapedLine::default().with_len(3),
+        ]);
+
+        let last_layout = LastLayout {
+            visible_range: 0..1,
+            visible_buffer_lines: vec![0],
+            visible_line_byte_offsets: vec![0],
+            visible_top: px(0.),
+            visible_range_offset: 0..0,
+            lines: Rc::new(vec![]),
+            line_height: px(20.),
+            wrap_width: None,
+            line_number_width: px(0.),
+            cursor_bounds: None,
+            text_align: TextAlign::Left,
+            content_width: px(0.),
+        };
+
+        assert_eq!(
+            line_layout.position_for_index(0, &last_layout, false),
+            Some(point(px(0.), px(0.)))
+        );
     }
 
     #[test]

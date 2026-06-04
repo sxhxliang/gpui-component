@@ -10,6 +10,7 @@ This is a Rust workspace project with the following main crates:
 
 - `crates/ui` - Core UI component library (published as `gpui-component`)
 - `crates/story` - Gallery application for showcasing and testing components
+- `crates/story-web` - Web version of the story gallery (using WebAssembly)
 - `crates/macros` - Procedural macros (`IntoPlot` derive)
 - `crates/assets` - Static assets
 - `crates/webview` - WebView component support
@@ -86,8 +87,8 @@ fn main() {
                 let view = cx.new(|_| MyView);
                 // The first level view in a window must be a Root
                 cx.new(|cx| Root::new(view, window, cx))
-            })?;
-            Ok::<_, anyhow::Error>(())
+            })
+            .expect("Failed to open window");
         }).detach();
     });
 }
@@ -188,6 +189,12 @@ Uses `rust-i18n` crate.
 - Localization files are located in `crates/ui/locales/`.
 - Only add `en`, `zh-CN`, `zh-HK` by default.
 
+## Documentation
+
+- Documentation source files are in `docs/`.
+- Docs have two locales: English (`docs/docs/`) and Chinese (`docs/zh-CN/docs/`).
+- When modifying any documentation file, always sync changes to both `en` and `zh-CN` versions.
+
 ## Platform Support
 
 - macOS (aarch64, x86_64)
@@ -198,30 +205,11 @@ CI runs full test suite on each platform.
 
 ## Skills Reference
 
-This project has custom Claude Code skills in `.claude/skills/` to assist with common development tasks:
+This project has custom Claude Code skills to assist with common development tasks:
 
-### Component Development Skills
-
-- **new-component** - Creating new GPUI components with proper structure and patterns
-- **generate-component-story** - Creating story examples for components in the gallery
-- **generate-component-documentation** - Generating documentation for components
-
-### GPUI Framework Skills
-
-- **gpui-action** - Working with actions and keyboard shortcuts
-- **gpui-async** - Async operations and background tasks
-- **gpui-context** - Context management (App, Window, AsyncApp)
-- **gpui-element** - Implementing custom elements using low-level Element API
-- **gpui-entity** - Entity management and state handling
-- **gpui-event** - Event handling and subscriptions
-- **gpui-focus-handle** - Focus management and keyboard navigation
-- **gpui-global** - Global state management
-- **gpui-layout-and-style** - Layout and styling systems
-- **gpui-test** - Writing tests for GPUI applications
-
-### Other Skills
-
-- **github-pull-request-description** - Writing PR descriptions
+- **gpui** (`skills/`) - GPUI framework knowledge: actions/keybindings, async, context, custom elements, entity state, events, focus, global state, layout/styling, testing
+- **gpui-component** (`skills/`) - How to use gpui-component: setup, stateless/stateful patterns, common component APIs, theming
+- **gpui-component-dev** (`.claude/skills/`) - Contributing to gpui-component: creating new components, writing stories, writing documentation, writing PR descriptions
 
 When working on tasks related to these areas, Claude Code will automatically use the appropriate skill to provide specialized guidance and patterns.
 

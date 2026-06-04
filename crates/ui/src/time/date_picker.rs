@@ -14,7 +14,7 @@ use crate::{
     actions::{Cancel, Confirm},
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Delete, clear_button},
+    input::{Delete, clear_button, input_style},
     v_flex,
 };
 
@@ -159,6 +159,16 @@ impl DatePickerState {
     pub fn disabled_matcher(mut self, disabled: impl Into<Matcher>) -> Self {
         self.disabled_matcher = Some(Rc::new(disabled.into()));
         self
+    }
+
+    /// Set the year range for the internal calendar.
+    ///
+    /// Default is 50 years before and after the current year.
+    /// `range` uses a half-open interval `(start, end)` where `end` is exclusive.
+    pub fn set_year_range(&mut self, range: (i32, i32), cx: &mut Context<Self>) {
+        self.calendar.update(cx, |state, cx| {
+            state.set_year_range(range, cx);
+        });
     }
 
     fn update_date(&mut self, date: Date, emit: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -368,6 +378,8 @@ impl RenderOnce for DatePicker {
             .format(&state.date_format)
             .unwrap_or(placeholder.clone());
 
+        let (bg, fg) = input_style(self.disabled, cx);
+
         div()
             .id(self.id.clone())
             .key_context(CONTEXT)
@@ -390,16 +402,14 @@ impl RenderOnce for DatePicker {
                     .items_center()
                     .justify_between()
                     .when(self.appearance, |this| {
-                        this.bg(cx.theme().background)
+                        this.bg(bg)
+                            .text_color(fg)
+                            .when(self.disabled, |this| this.opacity(0.5))
                             .border_1()
                             .border_color(cx.theme().input)
                             .rounded(cx.theme().radius)
                             .when(cx.theme().shadow, |this| this.shadow_xs())
                             .when(is_focused, |this| this.focused_border(cx))
-                            .when(self.disabled, |this| {
-                                this.bg(cx.theme().muted)
-                                    .text_color(cx.theme().muted_foreground)
-                            })
                     })
                     .overflow_hidden()
                     .input_text_size(self.size)

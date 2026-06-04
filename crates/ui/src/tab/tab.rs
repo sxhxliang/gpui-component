@@ -41,7 +41,7 @@ impl TabVariant {
         }
     }
 
-    fn inner_height(&self, size: Size) -> Pixels {
+    pub(super) fn inner_height(&self, size: Size) -> Pixels {
         match size {
             Size::XSmall => match self {
                 TabVariant::Tab | TabVariant::Outline | TabVariant::Pill => px(18.),
@@ -171,7 +171,7 @@ impl TabVariant {
     fn hovered(&self, selected: bool, cx: &App) -> TabStyle {
         match self {
             TabVariant::Tab => TabStyle {
-                fg: cx.theme().tab_foreground,
+                fg: cx.theme().tab_active_foreground,
                 bg: cx.theme().transparent,
                 borders: Edges {
                     left: px(1.),
@@ -194,7 +194,7 @@ impl TabVariant {
                 ..Default::default()
             },
             TabVariant::Segmented => TabStyle {
-                fg: cx.theme().tab_foreground,
+                fg: cx.theme().tab_active_foreground,
                 bg: cx.theme().transparent,
                 inner_bg: if selected {
                     cx.theme().background
@@ -204,7 +204,7 @@ impl TabVariant {
                 ..Default::default()
             },
             TabVariant::Underline => TabStyle {
-                fg: cx.theme().tab_foreground,
+                fg: cx.theme().tab_active_foreground,
                 bg: cx.theme().transparent,
                 inner_bg: cx.theme().transparent,
                 borders: Edges {
@@ -354,7 +354,7 @@ impl TabVariant {
         }
     }
 
-    fn inner_radius(&self, size: Size, cx: &App) -> Pixels {
+    pub(super) fn inner_radius(&self, size: Size, cx: &App) -> Pixels {
         match self {
             TabVariant::Segmented => match size {
                 Size::Large => self.tab_bar_radius(size, cx) - px(3.),
@@ -394,7 +394,7 @@ pub struct Tab {
     ix: usize,
     base: Div,
     pub(super) label: Option<SharedString>,
-    icon: Option<Icon>,
+    pub(super) icon: Option<Icon>,
     prefix: Option<AnyElement>,
     pub(super) tab_bar_prefix: Option<bool>,
     suffix: Option<AnyElement>,
@@ -403,6 +403,8 @@ pub struct Tab {
     size: Size,
     pub(super) disabled: bool,
     pub(super) selected: bool,
+    pub(super) indicator_active: bool,
+    pub(super) indicator_ready: bool,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
@@ -447,6 +449,8 @@ impl Default for Tab {
             children: Vec::new(),
             disabled: false,
             selected: false,
+            indicator_active: false,
+            indicator_ready: true,
             prefix: None,
             suffix: None,
             variant: TabVariant::default(),
@@ -608,14 +612,28 @@ impl RenderOnce for Tab {
         let inner_height = self.variant.inner_height(self.size);
         let height = self.variant.height(self.size);
 
+        let segmented_indicator_active =
+            self.variant == TabVariant::Segmented && self.indicator_active;
+        let has_inline_inner_bg =
+            self.selected && segmented_indicator_active && !self.indicator_ready;
+        let inline_inner_bg = tab_style.inner_bg;
+        let (inner_bg, hover_inner_bg) = if segmented_indicator_active && self.indicator_ready {
+            (cx.theme().transparent, cx.theme().transparent)
+        } else if has_inline_inner_bg {
+            (inline_inner_bg, inline_inner_bg)
+        } else {
+            (tab_style.inner_bg, hover_style.inner_bg)
+        };
+        let inner_shadow = tab_style.shadow && !segmented_indicator_active;
+
         self.base
             .id(self.ix)
+            .relative()
             .flex()
             .flex_wrap()
             .gap_1()
             .items_center()
             .flex_shrink_0()
-            .overflow_hidden()
             .h(height)
             .overflow_hidden()
             .text_color(tab_style.fg)
@@ -643,12 +661,33 @@ impl RenderOnce for Tab {
                         .rounded(radius)
                 })
             })
+            .when(has_inline_inner_bg, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top_0()
+                        .bottom_0()
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .w_full()
+                                .h(inner_height)
+                                .bg(inline_inner_bg)
+                                .rounded(inner_radius)
+                                .when(tab_style.shadow, |this| this.shadow_xs()),
+                        ),
+                )
+            })
             .when_some(self.prefix, |this, prefix| this.child(prefix))
             .child(
                 h_flex()
                     .flex_1()
                     .h(inner_height)
                     .line_height(relative(1.))
+                    .whitespace_nowrap()
                     .items_center()
                     .justify_center()
                     .overflow_hidden()
@@ -672,10 +711,10 @@ impl RenderOnce for Tab {
                             })
                             .children(self.children),
                     })
-                    .bg(tab_style.inner_bg)
+                    .bg(inner_bg)
                     .rounded(inner_radius)
-                    .when(tab_style.shadow, |this| this.shadow_xs())
-                    .hover(|this| this.bg(hover_style.inner_bg).rounded(inner_radius)),
+                    .when(inner_shadow, |this| this.shadow_xs())
+                    .hover(|this| this.bg(hover_inner_bg).rounded(inner_radius)),
             )
             .when_some(self.suffix, |this, suffix| this.child(suffix))
             .on_mouse_down(MouseButton::Left, |_, _, cx| {

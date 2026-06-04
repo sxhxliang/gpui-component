@@ -163,6 +163,7 @@ impl Settings {
             .w(relative(1.))
             .border_0()
             .refine_style(&self.sidebar_style)
+            .collapsible(false)
             .collapsed(false)
             .header(
                 div()
@@ -175,6 +176,8 @@ impl Settings {
                     let is_page_active =
                         selected_index.page_ix == page_ix && selected_index.group_ix.is_none();
                     SidebarMenuItem::new(page.title.clone())
+                        .click_to_open(true)
+                        .when_some(page.icon.clone(), |this, icon| this.icon(icon))
                         .default_open(page.default_open)
                         .active(is_page_active)
                         .on_click({
@@ -244,6 +247,7 @@ pub struct RenderOptions {
     pub size: Size,
     pub group_variant: GroupBoxVariant,
     pub layout: Axis,
+    pub disabled: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -277,6 +281,7 @@ impl RenderOnce for Settings {
             size: self.size,
             group_variant: self.group_variant,
             layout: Axis::Horizontal,
+            disabled: false,
         };
 
         h_resizable(self.id.clone())

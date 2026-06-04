@@ -141,8 +141,8 @@ impl NumberInputStory {
                 }
                 println!("Change: {}", text);
             }
-            InputEvent::PressEnter { secondary } => {
-                println!("PressEnter secondary: {}", secondary)
+            InputEvent::PressEnter { secondary, shift } => {
+                println!("PressEnter secondary: {}, shift: {}", secondary, shift)
             }
             InputEvent::Focus => println!("Focus"),
             InputEvent::Blur => println!("Blur"),
@@ -248,7 +248,8 @@ impl Render for NumberInputStory {
                 section("Without appearance").max_w(px(200.)).child(
                     NumberInput::new(&self.number_input4)
                         .appearance(false)
-                        .bg(cx.theme().secondary),
+                        .bg(cx.theme().secondary)
+                        .text_color(cx.theme().info),
                 ),
             )
     }

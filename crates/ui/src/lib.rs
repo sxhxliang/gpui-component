@@ -1,12 +1,12 @@
 use gpui::{App, SharedString};
 use std::ops::Deref;
 
-mod anchored;
+mod async_util;
 mod element_ext;
 mod event;
 mod focus_trap;
 mod geometry;
-mod global_state;
+pub mod global_state;
 mod icon;
 mod index_path;
 #[cfg(any(feature = "inspector", debug_assertions))]
@@ -33,9 +33,9 @@ pub mod checkbox;
 pub mod clipboard;
 pub mod collapsible;
 pub mod color_picker;
+pub mod combobox;
 pub mod description_list;
 pub mod dialog;
-pub mod divider;
 pub mod dock;
 pub mod form;
 pub mod group_box;
@@ -57,7 +57,9 @@ pub mod radio;
 pub mod rating;
 pub mod resizable;
 pub mod scroll;
+pub mod searchable_list;
 pub mod select;
+pub mod separator;
 pub mod setting;
 pub mod sheet;
 pub mod sidebar;
@@ -75,11 +77,11 @@ pub mod tooltip;
 pub mod tree;
 
 pub use crate::Disableable;
-pub(crate) use anchored::*;
 pub use element_ext::*;
 pub use event::InteractiveElementExt;
 pub use focus_trap::FocusTrapElement;
 pub use geometry::*;
+pub use global_state::GlobalState;
 pub use gpui_component_macros::icon_named;
 pub use icon::*;
 pub use index_path::IndexPath;
@@ -111,6 +113,7 @@ pub fn init(cx: &mut App) {
     date_picker::init(cx);
     dock::init(cx);
     sheet::init(cx);
+    combobox::init(cx);
     select::init(cx);
     input::init(cx);
     list::init(cx);
@@ -120,6 +123,7 @@ pub fn init(cx: &mut App) {
     table::init(cx);
     text::init(cx);
     tree::init(cx);
+    tooltip::init(cx);
 }
 
 #[inline]
